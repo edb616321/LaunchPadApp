@@ -1,0 +1,72 @@
+{
+  "bookmarks": {
+    "D:": {
+      "path": "D:\\",
+      "name": "D:"
+    },
+    "Home": {
+      "path": "C:\\Users\\edb616321",
+      "name": "Home"
+    },
+    "LaunchPad": {
+      "path": "D:\\LaunchPadApp",
+      "name": "LaunchPad"
+    },
+    "QuickTube": {
+      "path": "D:\\QuickTube",
+      "name": "QuickTube"
+    },
+    "F:": {
+      "path": "F:\\",
+      "name": "F:"
+    },
+    "Downloads": {
+      "path": "C:\\Users\\edb616321\\Downloads",
+      "name": "Downloads"
+    },
+    "Desktop": {
+      "path": "C:\\Users\\edb616321\\Desktop",
+      "name": "Desktop"
+    },
+    "Documents": {
+      "path": "C:\\Users\\edb616321\\Documents",
+      "name": "Documents"
+    },
+    "F1": {
+      "path": "D:\\",
+      "name": "F1"
+    },
+    "F2": {
+      "path": "C:\\Users\\edb616321",
+      "name": "F2"
+    },
+    "F3": {
+      "path": "D:\\LaunchPadApp",
+      "name": "F3"
+    },
+    "F4": {
+      "path": "D:\\QuickTube",
+      "name": "F4"
+    },
+    "F5": {
+      "path": "F:\\",
+      "name": "F5"
+    },
+    "F6": null,
+    "F7": null,
+    "F8": null,
+    "F9": null,
+    "F10": null
+  },
+  "left_pane": {
+    "path": "C:\\Users\\edb616321",
+    "show_tree": true
+  },
+  "right_pane": {
+    "path": "D:\\",
+    "show_tree": true
+  },
+  "show_hidden": false,
+  "sort_by": "name",
+  "sort_ascending": true
+}

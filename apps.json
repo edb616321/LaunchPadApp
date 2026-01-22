@@ -1,0 +1,323 @@
+[
+  {
+    "name": "Dual-Pane",
+    "path": "http://10.0.0.251:8201/dual-pane",
+    "category": "Quick Links",
+    "monitor": 2
+  },
+  {
+    "name": "LinkedIn",
+    "path": "https://www.linkedin.com/feed/",
+    "category": "Quick Links",
+    "monitor": 2
+  },
+  {
+    "name": "YouTube",
+    "path": "https://www.youtube.com/",
+    "category": "Quick Links",
+    "monitor": 2
+  },
+  {
+    "name": "Chrome",
+    "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "args": ["https://nc.brookmanfamily.com"],
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Edge",
+    "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Firefox",
+    "path": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Brave",
+    "path": "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Thorium",
+    "path": "C:\\Users\\edb616321\\AppData\\Local\\Thorium\\Application\\thorium.exe",
+    "args": ["--new-window"],
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Comet",
+    "path": "C:\\Users\\edb616321\\AppData\\Local\\Perplexity\\Comet\\Application\\comet.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Terminal",
+    "path": "C:\\Users\\edb616321\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Nextcloud",
+    "path": "https://nc.brookmanfamily.com",
+    "category": "Quick Links",
+    "monitor": 2
+  },
+  {
+    "name": "Word",
+    "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "RDP",
+    "path": "C:\\Windows\\System32\\mstsc.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "MobaXterm",
+    "path": "C:\\Program Files (x86)\\Mobatek\\MobaXterm\\MobaXterm.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Directory Opus",
+    "path": "D:\\program files\\GPSoftware\\Directory Opus\\dopus.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Mailbird",
+    "path": "C:\\Program Files\\Mailbird\\Mailbird.exe",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "QuickDrop",
+    "path": "D:\\QuickDrop\\quickdrop.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "QuickTube",
+    "path": "D:\\QuickTube\\quicktube.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "PresentationForge",
+    "path": "D:\\PresentationForge\\presentationforge.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "QuickChat",
+    "path": "D:\\QuickChat\\quickchat.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "QuickMedia",
+    "path": "D:\\QuickMedia\\quickmedia.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "Dual-Pane AI",
+    "path": "http://10.0.0.251:8201/dual-pane",
+    "category": "AI",
+    "monitor": 2
+  },
+  {
+    "name": "MyGaia",
+    "path": "https://mygaia.ai/",
+    "category": "AI",
+    "monitor": 2
+  },
+  {
+    "name": "MyGaia Admin",
+    "path": "https://mygaia.ai/admin",
+    "category": "AI",
+    "monitor": 2
+  },
+  {
+    "name": "Remote Desktop",
+    "path": "C:\\Windows\\System32\\mstsc.exe",
+    "category": "Remote",
+    "monitor": 0
+  },
+  {
+    "name": "MobaXterm Terminal",
+    "path": "C:\\Program Files (x86)\\Mobatek\\MobaXterm\\MobaXterm.exe",
+    "category": "Remote",
+    "monitor": 0
+  },
+  {
+    "name": "Remote Desktop Manager",
+    "path": "C:\\Program Files\\Devolutions\\Remote Desktop Manager\\RemoteDesktopManager.exe",
+    "category": "Remote",
+    "monitor": 0
+  },
+  {
+    "name": "PuTTY",
+    "path": "C:\\Program Files\\PuTTY\\putty.exe",
+    "category": "Remote",
+    "monitor": 0
+  },
+  {
+    "name": "VS Code",
+    "path": "C:\\Users\\edb616321\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "category": "Development",
+    "monitor": 2
+  },
+  {
+    "name": "Google Cloud",
+    "path": "https://console.cloud.google.com/apis/credentials/key/870d1632-77d4-4ea5-a5b4-fd9b4127cf93?project=gen-lang-client-0352578790",
+    "category": "Development",
+    "monitor": 2
+  },
+  {
+    "name": "Godot Engine",
+    "path": "D:\\Godot\\Godot_v4.5.exe",
+    "category": "Development",
+    "monitor": 2
+  },
+  {
+    "name": "Claude Code",
+    "path": "https://claude.ai/code",
+    "category": "Development",
+    "monitor": 2
+  },
+  {
+    "name": "Windows Explorer",
+    "path": "C:\\Windows\\explorer.exe",
+    "category": "File Managers",
+    "monitor": 0
+  },
+  {
+    "name": "Directory Opus",
+    "path": "D:\\program files\\GPSoftware\\Directory Opus\\dopus.exe",
+    "category": "File Managers",
+    "monitor": 0
+  },
+  {
+    "name": "Music Library",
+    "path": "D:\\music_library",
+    "category": "File Managers",
+    "monitor": 2
+  },
+  {
+    "name": "VMware",
+    "path": "https://10.0.0.220/",
+    "category": "Utilities",
+    "monitor": 0
+  },
+  {
+    "name": "Revo Uninstaller",
+    "path": "C:\\Program Files\\VS Revo Group\\Revo Uninstaller Pro\\RevoUninPro.exe",
+    "category": "Utilities",
+    "monitor": 0
+  },
+  {
+    "name": "Notepad",
+    "path": "notepad.exe",
+    "category": "Utilities",
+    "monitor": 0
+  },
+  {
+    "name": "QuickDrop",
+    "path": "D:\\QuickDrop\\quickdrop.py",
+    "category": "Utilities",
+    "monitor": 0
+  },
+  {
+    "name": "Chrome Browser",
+    "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "args": ["https://nc.brookmanfamily.com"],
+    "category": "Web",
+    "monitor": 0
+  },
+  {
+    "name": "Edge Browser",
+    "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "category": "Web",
+    "monitor": 0
+  },
+  {
+    "name": "Firefox Browser",
+    "path": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    "category": "Web",
+    "monitor": 0
+  },
+  {
+    "name": "Brave Browser",
+    "path": "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    "category": "Web",
+    "monitor": 0
+  },
+  {
+    "name": "LinkedIn Network",
+    "path": "https://www.linkedin.com/feed/",
+    "category": "Web",
+    "monitor": 2
+  },
+  {
+    "name": "Nextcloud Server",
+    "path": "https://nc.brookmanfamily.com",
+    "category": "Web",
+    "monitor": 2
+  },
+  {
+    "name": "Google Admin",
+    "path": "https://admin.google.com/",
+    "category": "Productivity",
+    "monitor": 2
+  },
+  {
+    "name": "Mailbird Email",
+    "path": "C:\\Program Files\\Mailbird\\Mailbird.exe",
+    "category": "Productivity",
+    "monitor": 0
+  },
+  {
+    "name": "Microsoft Word",
+    "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+    "category": "Productivity",
+    "monitor": 0
+  },
+  {
+    "name": "YouTube Videos",
+    "path": "https://www.youtube.com/",
+    "category": "Media",
+    "monitor": 2
+  },
+  {
+    "name": "MP3 Library",
+    "path": "D:\\music_library",
+    "category": "Media",
+    "monitor": 2
+  },
+  {
+    "name": "4K Video Downloader",
+    "path": "C:\\Program Files\\4KDownload\\4kvideodownloaderplus\\4kvideodownloaderplus.exe",
+    "category": "Media",
+    "monitor": 0
+  },
+  {
+    "name": "Stacher",
+    "path": "C:\\Users\\edb616321\\AppData\\Local\\Stacher7\\Stacher7.exe",
+    "category": "Media",
+    "monitor": 0
+  },
+  {
+    "name": "QuickTube",
+    "path": "D:\\QuickTube\\quicktube.py",
+    "category": "Media",
+    "monitor": 0
+  }
+]
