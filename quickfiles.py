@@ -718,6 +718,11 @@ class FileListPane(ctk.CTkFrame):
         self.sort_ascending = True
         self.show_hidden = False
 
+        # Navigation history (like browser back/forward)
+        self.history: List[str] = []
+        self.history_index: int = -1
+        self._navigating_history = False  # Flag to prevent adding to history during back/forward
+
         self._setup_ui()
         self.navigate_to(initial_path)
 
@@ -740,6 +745,33 @@ class FileListPane(ctk.CTkFrame):
             width=160
         )
         folder_label.pack(side="left", padx=(0, 5))
+
+        # Back/Forward navigation buttons - BIG and ALWAYS VISIBLE
+        self.back_btn = ctk.CTkButton(
+            path_row,
+            text="◀",
+            width=70,
+            height=50,
+            font=ctk.CTkFont(size=36, weight="bold"),
+            fg_color="#0047AB",  # Medium blue (disabled state initially)
+            hover_color="#00E5FF",
+            text_color="#88BBDD",  # Light blue-gray
+            command=self._on_back_click
+        )
+        self.back_btn.pack(side="left", padx=(0, 5))
+
+        self.forward_btn = ctk.CTkButton(
+            path_row,
+            text="▶",
+            width=70,
+            height=50,
+            font=ctk.CTkFont(size=36, weight="bold"),
+            fg_color="#0047AB",  # Medium blue (disabled state initially)
+            hover_color="#00E5FF",
+            text_color="#88BBDD",  # Light blue-gray
+            command=self._on_forward_click
+        )
+        self.forward_btn.pack(side="left", padx=(0, 15))
 
         # Path entry - BIGGER FONT
         self.path_entry = ctk.CTkEntry(
@@ -1013,12 +1045,26 @@ class FileListPane(ctk.CTkFrame):
         else:
             messagebox.showwarning("Invalid Path", f"'{path}' is not a valid directory.")
 
-    def navigate_to(self, path: str):
+    def navigate_to(self, path: str, add_to_history: bool = True):
         """Navigate to a directory"""
         if not os.path.isdir(path):
             return
 
         self.current_path = os.path.abspath(path)
+
+        # Add to navigation history (unless navigating via back/forward)
+        if add_to_history and not self._navigating_history:
+            # If we're not at the end of history, truncate forward history
+            if self.history_index < len(self.history) - 1:
+                self.history = self.history[:self.history_index + 1]
+            # Add new path if different from current
+            if not self.history or self.history[-1] != self.current_path:
+                self.history.append(self.current_path)
+                self.history_index = len(self.history) - 1
+                # Limit history size to 50 entries
+                if len(self.history) > 50:
+                    self.history = self.history[-50:]
+                    self.history_index = len(self.history) - 1
 
         # Update path entry
         self.path_entry.delete(0, "end")
@@ -1027,9 +1073,70 @@ class FileListPane(ctk.CTkFrame):
         # Load directory contents
         self._load_directory()
 
+        # Update navigation button states
+        self._update_nav_buttons()
+
         # Notify callback
         if self.on_path_change:
             self.on_path_change(self.current_path)
+
+    def go_back(self):
+        """Navigate to previous folder in history"""
+        if self.history_index > 0:
+            self.history_index -= 1
+            self._navigating_history = True
+            self.navigate_to(self.history[self.history_index], add_to_history=False)
+            self._navigating_history = False
+            return True
+        return False
+
+    def go_forward(self):
+        """Navigate to next folder in history"""
+        if self.history_index < len(self.history) - 1:
+            self.history_index += 1
+            self._navigating_history = True
+            self.navigate_to(self.history[self.history_index], add_to_history=False)
+            self._navigating_history = False
+            return True
+        return False
+
+    def can_go_back(self) -> bool:
+        """Check if back navigation is possible"""
+        return self.history_index > 0
+
+    def can_go_forward(self) -> bool:
+        """Check if forward navigation is possible"""
+        return self.history_index < len(self.history) - 1
+
+    def _on_back_click(self):
+        """Handle back button click"""
+        self.go_back()
+        self._update_nav_buttons()
+
+    def _on_forward_click(self):
+        """Handle forward button click"""
+        self.go_forward()
+        self._update_nav_buttons()
+
+    def _update_nav_buttons(self):
+        """Update back/forward button states (enabled/disabled look)"""
+        # Bright cyan when enabled, medium blue when disabled (still visible!)
+        enabled_bg = "#00BFFF"  # Bright cyan
+        enabled_text = "#FFFFFF"  # White
+        disabled_bg = "#0047AB"  # Medium blue - STILL VISIBLE
+        disabled_text = "#88BBDD"  # Light blue-gray - STILL VISIBLE
+
+        if hasattr(self, 'back_btn'):
+            if self.can_go_back():
+                self.back_btn.configure(fg_color=enabled_bg, text_color=enabled_text)
+            else:
+                self.back_btn.configure(fg_color=disabled_bg, text_color=disabled_text)
+
+        if hasattr(self, 'forward_btn'):
+            if self.can_go_forward():
+                self.forward_btn.configure(fg_color=enabled_bg, text_color=enabled_text)
+            else:
+                self.forward_btn.configure(fg_color=disabled_bg, text_color=disabled_text)
 
     def _load_directory(self):
         """Load directory contents into self.items"""
@@ -1877,6 +1984,10 @@ class QuickFilesWidget(ctk.CTkFrame):
         # Navigation
         bind_key("<Tab>", self._switch_pane)
         bind_key("<BackSpace>", self._go_parent)
+        bind_key("<Left>", self._go_back)
+        bind_key("<Right>", self._go_forward)
+        bind_key("<Alt-Left>", self._go_back)      # Alt+Left also works
+        bind_key("<Alt-Right>", self._go_forward)  # Alt+Right also works
 
         # Operations - these are already handled by buttons, keys are optional
         bind_key("<Delete>", lambda e: self._delete_selected())
@@ -1907,6 +2018,20 @@ class QuickFilesWidget(ctk.CTkFrame):
     def _go_parent(self, event=None):
         """Navigate to parent directory"""
         self._get_active_pane().go_parent()
+        return "break"
+
+    def _go_back(self, event=None):
+        """Navigate back in history"""
+        pane = self._get_active_pane()
+        if pane.go_back():
+            self._log(f"Back to {pane.current_path}", "info")
+        return "break"
+
+    def _go_forward(self, event=None):
+        """Navigate forward in history"""
+        pane = self._get_active_pane()
+        if pane.go_forward():
+            self._log(f"Forward to {pane.current_path}", "info")
         return "break"
 
     def _on_path_change(self, pane: str, path: str):
