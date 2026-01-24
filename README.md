@@ -4,22 +4,32 @@ A modern, multi-panel command center with application launcher, video player, an
 
 ## Current Status: IN DEVELOPMENT
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-24
 
 ### Working Features
 - Application launcher with large icons (200x200px cards)
 - Multi-monitor app launching (M2, M3, M4 buttons)
-- QuickPlayer video/audio player with MPV backend
-- QuickFiles dual-pane file manager
+- QuickPlayer video/audio/image player with MPV backend
+- QuickFiles dual-pane file manager with thumbnail view
 - Named bookmark buttons (D:, Home, LaunchPad, etc.)
 - File list with Name, Size, Created, Modified columns
+- Thumbnail view with grid display (50 item limit for performance)
 - Right-click context menu with file operations
 - System volume control in header
+- Image controls: Fit to Window, Actual Size, Zoom slider (10-400%)
+- Scrollbars for zoomed images
+- QuickImage features: Convert Format, Resize, Adjust Quality
+- Edit in QuickDrop integration
+
+### Panel Default Sizes
+- Quick Links: 20% (600px)
+- QuickPlayer: 40% (1200px)
+- QuickFiles Left: 30%
+- QuickFiles Right: 10%
 
 ### Known Issues / In Progress
-- **Search filtering**: Code implemented but may have UI responsiveness issues
 - **MPV threading warning**: Non-critical "main thread is not in main loop" warning appears
-- **Window handle exhaustion**: Can occur if app crashes repeatedly without cleanup
+- **Large folder thumbnails**: Limited to 50 items to prevent UI freezing
 
 ## Overview
 
@@ -83,11 +93,17 @@ python launcher.py
 - **Right-click menu**: Edit, Duplicate, Delete
 - **Categories**: Web, Development, Tools, Productivity, Media, Games
 
-### QuickPlayer (Video/Audio Player)
+### QuickPlayer (Video/Audio/Image Player)
 
-- **Drag-and-drop** video/audio files
-- **Supported formats**: MP4, AVI, MKV, MOV, WMV, WebM, MP3, WAV, FLAC, etc.
+- **Drag-and-drop** video/audio/image files
+- **Supported formats**: MP4, AVI, MKV, MOV, WMV, WebM, MP3, WAV, FLAC, PNG, JPG, GIF, etc.
 - **Playback controls**: Play/Pause, Seek, Volume
+- **Image controls** (top bar):
+  - Fit to Window: Scale image to fit display
+  - Actual Size: Show image at 100% zoom
+  - Zoom slider: 10% to 400%
+  - Mousewheel zoom support
+- **Scrollbars** for panning zoomed images
 - **40pt title font** for readability
 
 ### QuickFiles (Dual-Pane File Manager)
@@ -96,10 +112,17 @@ python launcher.py
 - **Named bookmarks**: D:, Home, LaunchPad, QuickTube, F:, Downloads, Desktop, Documents
 - **File columns**: Name, Size (right-aligned), Created, Modified (centered)
 - **Human-readable dates**: "Today 2:30 PM", "Yesterday", "Sun 19th", "Jan 5th, 2024"
+- **View modes**: List view or Thumbnail view (toggle button)
+- **Thumbnail view**: Grid of image previews with 50 item limit for performance
 - **Search/filter**: Type patterns like `*.mp3`, `*.txt`, `file.*`, `*.doc?`
 - **Right-click menu**:
   - Open / Open in Explorer
   - Play in QuickPlayer (for media files)
+  - Edit in QuickDrop (for images)
+  - QuickImage submenu (for images):
+    - Convert Format (PNG, JPEG, WebP, BMP, GIF, TIFF)
+    - Resize Image (with presets)
+    - Adjust Quality (1-100%)
   - Refresh
   - Copy / Cut / Paste
   - Rename / Delete
@@ -203,7 +226,17 @@ COLORS = {
 
 ## Version History
 
-**v2.0** (2026-01-22) - Current
+**v2.1** (2026-01-24) - Current
+- Added thumbnail view to QuickFiles with 50 item limit
+- Added image controls to QuickPlayer (Fit to Window, Actual Size, Zoom 10-400%)
+- Added scrollbars for panning zoomed images
+- Added mousewheel zoom support
+- Added QuickImage features: Convert Format, Resize, Adjust Quality
+- Added Edit in QuickDrop integration
+- Fixed right-click context menu in thumbnail view
+- Optimized panel default sizes (20%/40%/30%/10%)
+
+**v2.0** (2026-01-22)
 - Added QuickFiles dual-pane file manager
 - Added QuickPlayer video/audio player
 - Added search filtering with wildcard patterns
@@ -240,6 +273,7 @@ COLORS = {
 2. MPV requires separate installation
 3. Some apps resist window positioning
 4. Drag-and-drop between panes not yet implemented
+5. Thumbnail view limited to 50 items for performance (large folders show partial)
 
 ---
 

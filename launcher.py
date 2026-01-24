@@ -327,9 +327,9 @@ class CommandCenterApp(ctk.CTk):
         self.app_grid = ctk.CTkFrame(self.scroll_frame, fg_color=COLORS["bg_dark"])
         self.app_grid.pack(fill="both", expand=True)
 
-        content_paned.add(left_frame, width=900, minsize=400, stretch="never")
+        content_paned.add(left_frame, width=600, minsize=200, stretch="never")  # 20%
 
-        # Middle: QuickPlayer video player (initial width 800px, resizable)
+        # Middle: QuickPlayer video player (35%)
         middle_frame = ctk.CTkFrame(content_paned, fg_color=COLORS["bg_dark"])
 
         # Create QuickPlayer widget
@@ -339,7 +339,7 @@ class CommandCenterApp(ctk.CTk):
         )
         self.quickplayer.pack(fill="both", expand=True)
 
-        content_paned.add(middle_frame, width=800, minsize=400, stretch="never")
+        content_paned.add(middle_frame, width=1200, minsize=300, stretch="never")  # 40%
 
         # Hidden log storage (for log_message compatibility)
         self.log_messages = []

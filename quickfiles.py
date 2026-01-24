@@ -694,6 +694,324 @@ class MobileEmailDialog(ctk.CTkToplevel):
         threading.Thread(target=run_ffmpeg, daemon=True).start()
 
 
+class ImageConvertDialog(ctk.CTkToplevel):
+    """Dialog for converting image format"""
+
+    def __init__(self, parent, file_path: str, log_callback=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.log_callback = log_callback
+
+        self.title("Convert Image Format")
+        self.geometry("500x400")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.grab_set()
+
+        self._setup_ui()
+
+    def _log(self, msg, level="info"):
+        if self.log_callback:
+            self.log_callback(msg, level)
+
+    def _setup_ui(self):
+        ctk.CTkLabel(
+            self, text="🔄 Convert Image Format",
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(pady=20)
+
+        filename = os.path.basename(self.file_path)
+        ctk.CTkLabel(
+            self, text=filename,
+            font=ctk.CTkFont(size=16),
+            text_color=COLORS["text"]
+        ).pack(pady=5)
+
+        # Output format selection
+        format_frame = ctk.CTkFrame(self, fg_color="transparent")
+        format_frame.pack(fill="x", padx=40, pady=20)
+
+        ctk.CTkLabel(
+            format_frame, text="Convert to:",
+            font=ctk.CTkFont(size=18),
+            text_color=COLORS["text"]
+        ).pack(anchor="w")
+
+        self.format_var = ctk.StringVar(value="png")
+        formats = [("PNG", "png"), ("JPEG", "jpg"), ("WebP", "webp"), ("BMP", "bmp"), ("GIF", "gif"), ("TIFF", "tiff")]
+
+        for label, fmt in formats:
+            ctk.CTkRadioButton(
+                format_frame, text=label,
+                font=ctk.CTkFont(size=14),
+                variable=self.format_var, value=fmt,
+                fg_color=COLORS["accent"]
+            ).pack(anchor="w", pady=3)
+
+        # Convert button
+        ctk.CTkButton(
+            self, text="Convert",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            width=200, height=50,
+            command=self._convert
+        ).pack(pady=30)
+
+    def _convert(self):
+        try:
+            from PIL import Image
+            img = Image.open(self.file_path)
+
+            # Generate output path
+            base = os.path.splitext(self.file_path)[0]
+            out_fmt = self.format_var.get()
+            output_path = f"{base}_converted.{out_fmt}"
+
+            # Convert and save
+            if out_fmt == "jpg":
+                img = img.convert("RGB")
+            img.save(output_path, quality=95)
+
+            self._log(f"Converted to: {os.path.basename(output_path)}", "success")
+            self.destroy()
+        except Exception as e:
+            self._log(f"Error: {str(e)}", "error")
+
+
+class ImageResizeDialog(ctk.CTkToplevel):
+    """Dialog for resizing images"""
+
+    def __init__(self, parent, file_path: str, log_callback=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.log_callback = log_callback
+
+        self.title("Resize Image")
+        self.geometry("500x450")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.grab_set()
+
+        self._setup_ui()
+
+    def _log(self, msg, level="info"):
+        if self.log_callback:
+            self.log_callback(msg, level)
+
+    def _setup_ui(self):
+        ctk.CTkLabel(
+            self, text="📐 Resize Image",
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(pady=20)
+
+        # Current size
+        try:
+            from PIL import Image
+            img = Image.open(self.file_path)
+            self.orig_width, self.orig_height = img.size
+            ctk.CTkLabel(
+                self, text=f"Current size: {self.orig_width} x {self.orig_height}",
+                font=ctk.CTkFont(size=16),
+                text_color=COLORS["text"]
+            ).pack(pady=5)
+        except:
+            self.orig_width, self.orig_height = 1920, 1080
+
+        # Size inputs
+        size_frame = ctk.CTkFrame(self, fg_color="transparent")
+        size_frame.pack(fill="x", padx=40, pady=20)
+
+        ctk.CTkLabel(size_frame, text="Width:", font=ctk.CTkFont(size=16)).pack(side="left", padx=5)
+        self.width_entry = ctk.CTkEntry(size_frame, width=100, font=ctk.CTkFont(size=16))
+        self.width_entry.insert(0, str(self.orig_width))
+        self.width_entry.pack(side="left", padx=5)
+
+        ctk.CTkLabel(size_frame, text="Height:", font=ctk.CTkFont(size=16)).pack(side="left", padx=15)
+        self.height_entry = ctk.CTkEntry(size_frame, width=100, font=ctk.CTkFont(size=16))
+        self.height_entry.insert(0, str(self.orig_height))
+        self.height_entry.pack(side="left", padx=5)
+
+        # Maintain aspect ratio
+        self.aspect_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            self, text="Maintain aspect ratio",
+            font=ctk.CTkFont(size=14),
+            variable=self.aspect_var,
+            fg_color=COLORS["accent"]
+        ).pack(pady=10)
+
+        # Presets
+        preset_frame = ctk.CTkFrame(self, fg_color="transparent")
+        preset_frame.pack(fill="x", padx=40, pady=10)
+
+        ctk.CTkLabel(preset_frame, text="Presets:", font=ctk.CTkFont(size=16)).pack(anchor="w")
+
+        presets_row = ctk.CTkFrame(preset_frame, fg_color="transparent")
+        presets_row.pack(fill="x", pady=5)
+
+        for label, w, h in [("50%", self.orig_width//2, self.orig_height//2),
+                            ("1080p", 1920, 1080), ("720p", 1280, 720), ("480p", 854, 480)]:
+            ctk.CTkButton(
+                presets_row, text=label, width=80,
+                fg_color=COLORS["card_bg"],
+                command=lambda ww=w, hh=h: self._set_size(ww, hh)
+            ).pack(side="left", padx=5)
+
+        # Resize button
+        ctk.CTkButton(
+            self, text="Resize",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            width=200, height=50,
+            command=self._resize
+        ).pack(pady=30)
+
+    def _set_size(self, w, h):
+        self.width_entry.delete(0, "end")
+        self.width_entry.insert(0, str(w))
+        self.height_entry.delete(0, "end")
+        self.height_entry.insert(0, str(h))
+
+    def _resize(self):
+        try:
+            from PIL import Image
+            img = Image.open(self.file_path)
+
+            new_width = int(self.width_entry.get())
+            new_height = int(self.height_entry.get())
+
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # Save
+            base, ext = os.path.splitext(self.file_path)
+            output_path = f"{base}_{new_width}x{new_height}{ext}"
+            img.save(output_path, quality=95)
+
+            self._log(f"Resized to: {os.path.basename(output_path)}", "success")
+            self.destroy()
+        except Exception as e:
+            self._log(f"Error: {str(e)}", "error")
+
+
+class ImageQualityDialog(ctk.CTkToplevel):
+    """Dialog for adjusting image quality"""
+
+    def __init__(self, parent, file_path: str, log_callback=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.log_callback = log_callback
+
+        self.title("Adjust Image Quality")
+        self.geometry("500x400")
+        self.configure(fg_color=COLORS["bg_dark"])
+        self.grab_set()
+
+        self._setup_ui()
+
+    def _log(self, msg, level="info"):
+        if self.log_callback:
+            self.log_callback(msg, level)
+
+    def _setup_ui(self):
+        ctk.CTkLabel(
+            self, text="✨ Adjust Image Quality",
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(pady=20)
+
+        filename = os.path.basename(self.file_path)
+        ctk.CTkLabel(
+            self, text=filename,
+            font=ctk.CTkFont(size=16),
+            text_color=COLORS["text"]
+        ).pack(pady=5)
+
+        # Quality slider
+        quality_frame = ctk.CTkFrame(self, fg_color="transparent")
+        quality_frame.pack(fill="x", padx=40, pady=30)
+
+        ctk.CTkLabel(
+            quality_frame, text="Quality (1-100):",
+            font=ctk.CTkFont(size=18),
+            text_color=COLORS["text"]
+        ).pack(anchor="w")
+
+        slider_row = ctk.CTkFrame(quality_frame, fg_color="transparent")
+        slider_row.pack(fill="x", pady=10)
+
+        self.quality_slider = ctk.CTkSlider(
+            slider_row, from_=1, to=100, width=300,
+            button_color=COLORS["accent"],
+            progress_color=COLORS["accent"]
+        )
+        self.quality_slider.set(95)
+        self.quality_slider.pack(side="left", padx=10)
+
+        self.quality_label = ctk.CTkLabel(
+            slider_row, text="95%",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLORS["text"]
+        )
+        self.quality_label.pack(side="left", padx=10)
+
+        self.quality_slider.configure(command=self._update_quality_label)
+
+        # Output format
+        format_frame = ctk.CTkFrame(self, fg_color="transparent")
+        format_frame.pack(fill="x", padx=40, pady=10)
+
+        ctk.CTkLabel(
+            format_frame, text="Output format:",
+            font=ctk.CTkFont(size=16),
+            text_color=COLORS["text"]
+        ).pack(side="left", padx=5)
+
+        self.format_var = ctk.StringVar(value="jpg")
+        ctk.CTkOptionMenu(
+            format_frame,
+            values=["jpg", "png", "webp"],
+            variable=self.format_var,
+            font=ctk.CTkFont(size=14),
+            fg_color=COLORS["card_bg"]
+        ).pack(side="left", padx=10)
+
+        # Save button
+        ctk.CTkButton(
+            self, text="Save",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            width=200, height=50,
+            command=self._save
+        ).pack(pady=30)
+
+    def _update_quality_label(self, value):
+        self.quality_label.configure(text=f"{int(value)}%")
+
+    def _save(self):
+        try:
+            from PIL import Image
+            img = Image.open(self.file_path)
+
+            quality = int(self.quality_slider.get())
+            out_fmt = self.format_var.get()
+
+            base = os.path.splitext(self.file_path)[0]
+            output_path = f"{base}_q{quality}.{out_fmt}"
+
+            if out_fmt == "jpg":
+                img = img.convert("RGB")
+
+            img.save(output_path, quality=quality, optimize=True)
+
+            self._log(f"Saved: {os.path.basename(output_path)}", "success")
+            self.destroy()
+        except Exception as e:
+            self._log(f"Error: {str(e)}", "error")
+
+
 class FileListPane(ctk.CTkFrame):
     """Single pane showing file list - using native Treeview for speed"""
 
@@ -840,9 +1158,62 @@ class FileListPane(ctk.CTkFrame):
             text="",
             font=ctk.CTkFont(size=24, weight="bold"),
             text_color=COLORS["accent"],
-            width=200
+            width=150
         )
-        self.search_result_label.pack(side="left", padx=10)
+        self.search_result_label.pack(side="left", padx=5)
+
+        # View mode row - separate row for better visibility
+        view_row = ctk.CTkFrame(top_frame, fg_color=COLORS["bg_dark"], height=50)
+        view_row.pack(fill="x", padx=5, pady=(5, 5))
+        view_row.pack_propagate(False)  # Keep the height
+
+        # VIEW label
+        view_label = ctk.CTkLabel(
+            view_row,
+            text="👁️ VIEW:",
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=COLORS["accent"]
+        )
+        view_label.pack(side="left", padx=(10, 15))
+
+        # View mode buttons (List, Medium Thumbnails, Large Thumbnails)
+        self.view_mode = "list"  # list, medium, large
+
+        self.view_list_btn = ctk.CTkButton(
+            view_row, text="📋 List", width=110, height=45,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["accent"],  # Active by default
+            hover_color=COLORS["accent_hover"],
+            command=lambda: self._set_view_mode("list")
+        )
+        self.view_list_btn.pack(side="left", padx=5)
+
+        self.view_medium_btn = ctk.CTkButton(
+            view_row, text="🔲 Medium", width=130, height=45,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent_hover"],
+            command=lambda: self._set_view_mode("medium")
+        )
+        self.view_medium_btn.pack(side="left", padx=5)
+
+        self.view_large_btn = ctk.CTkButton(
+            view_row, text="🖼️ Large", width=130, height=45,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent_hover"],
+            command=lambda: self._set_view_mode("large")
+        )
+        self.view_large_btn.pack(side="left", padx=5)
+
+        self.view_xlarge_btn = ctk.CTkButton(
+            view_row, text="🔳 XL", width=100, height=45,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent_hover"],
+            command=lambda: self._set_view_mode("xlarge")
+        )
+        self.view_xlarge_btn.pack(side="left", padx=5)
 
         # Style for Treeview - dark theme with BIG fonts
         style = ttk.Style()
@@ -866,17 +1237,52 @@ class FileListPane(ctk.CTkFrame):
             foreground=[('selected', COLORS["text"])]
         )
 
-        # Frame for Treeview + scrollbar
-        tree_frame = tk.Frame(self, bg=COLORS["card_bg"])
-        tree_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        # Container for both list and thumbnail views
+        self.view_container = tk.Frame(self, bg=COLORS["card_bg"])
+        self.view_container.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_frame)
+        # Frame for Treeview + scrollbar (LIST VIEW)
+        self.tree_frame = tk.Frame(self.view_container, bg=COLORS["card_bg"])
+        self.tree_frame.pack(fill="both", expand=True)
+
+        # Scrollbar for treeview
+        scrollbar = ttk.Scrollbar(self.tree_frame)
         scrollbar.pack(side="right", fill="y")
+
+        # Frame for Thumbnail view (hidden initially)
+        self.thumb_frame = tk.Frame(self.view_container, bg=COLORS["bg_dark"])
+        # Canvas with scrollbar for thumbnails
+        self.thumb_canvas = tk.Canvas(self.thumb_frame, bg=COLORS["bg_dark"], highlightthickness=0)
+        self.thumb_scrollbar = ttk.Scrollbar(self.thumb_frame, orient="vertical", command=self.thumb_canvas.yview)
+        self.thumb_inner = tk.Frame(self.thumb_canvas, bg=COLORS["bg_dark"])
+
+        self.thumb_canvas.pack(side="left", fill="both", expand=True)
+        self.thumb_scrollbar.pack(side="right", fill="y")
+        self.thumb_canvas.configure(yscrollcommand=self.thumb_scrollbar.set)
+
+        # Create window in canvas for inner frame
+        self.thumb_canvas_window = self.thumb_canvas.create_window((0, 0), window=self.thumb_inner, anchor="nw")
+
+        # Bind canvas resize
+        self.thumb_canvas.bind("<Configure>", self._on_thumb_canvas_configure)
+        self.thumb_inner.bind("<Configure>", lambda e: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all")))
+
+        # Mouse wheel scrolling for thumbnails - bind to canvas and inner frame
+        def _on_mousewheel(e):
+            self.thumb_canvas.yview_scroll(int(-1*(e.delta/120)), "units")
+        self._thumb_mousewheel_handler = _on_mousewheel
+        self.thumb_canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.thumb_inner.bind("<MouseWheel>", _on_mousewheel)
+        self.thumb_frame.bind("<MouseWheel>", _on_mousewheel)
+
+        # Thumbnail cache and selection
+        self._thumb_cache = {}
+        self._thumb_widgets = []
+        self._selected_thumb_item = None
 
         # Treeview with Name, Size, Created, Modified columns
         self.tree = ttk.Treeview(
-            tree_frame,
+            self.tree_frame,
             columns=("name", "size", "created", "modified"),
             show="headings",
             style="Custom.Treeview",
@@ -904,6 +1310,13 @@ class FileListPane(ctk.CTkFrame):
         self.tree.bind("<BackSpace>", self._go_parent)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Button-3>", self._on_right_click)  # Right-click menu
+        self.tree.bind("<Button-2>", self._on_middle_click)  # Middle-click to send to QuickPlayer
+
+        # Drag-and-drop to QuickPlayer
+        self._drag_data = {"item": None, "x": 0, "y": 0}
+        self.tree.bind("<ButtonPress-1>", self._on_drag_start)
+        self.tree.bind("<B1-Motion>", self._on_drag_motion)
+        self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
 
     def _on_search_change(self, *args):
         """Filter file list based on search pattern - INSTANT filtering"""
@@ -919,7 +1332,7 @@ class FileListPane(ctk.CTkFrame):
             # Clear recursive results if not searching recursively
             self.recursive_results = []
             print(f"[SEARCH TRIGGERED] Path: {self.current_path}, Pattern: '{pattern}', Items: {len(self.items)}")
-            self._refresh_tree_view()
+            self._refresh_view()
 
     def _on_recursive_change(self):
         """Handle recursive checkbox change"""
@@ -985,7 +1398,7 @@ class FileListPane(ctk.CTkFrame):
             if self._search_id == current_search_id:
                 self.recursive_results = results
                 self._searching_active = False  # Stop blinking
-                self.after(0, self._refresh_tree_view)
+                self.after(0, self._refresh_view)
                 print(f"[RECURSIVE SEARCH] Found {len(results)} matches for '{search_pattern}'")
             else:
                 # Search was superseded - new search will handle blinking
@@ -1138,6 +1551,442 @@ class FileListPane(ctk.CTkFrame):
             else:
                 self.forward_btn.configure(fg_color=disabled_bg, text_color=disabled_text)
 
+    def _set_view_mode(self, mode: str):
+        """Switch between list, medium, large, and xlarge thumbnail views"""
+        self.view_mode = mode
+
+        # Update button colors
+        active_color = COLORS["accent"]
+        inactive_color = COLORS["card_bg"]
+
+        self.view_list_btn.configure(fg_color=active_color if mode == "list" else inactive_color)
+        self.view_medium_btn.configure(fg_color=active_color if mode == "medium" else inactive_color)
+        self.view_large_btn.configure(fg_color=active_color if mode == "large" else inactive_color)
+        self.view_xlarge_btn.configure(fg_color=active_color if mode == "xlarge" else inactive_color)
+
+        # Show/hide appropriate view
+        if mode == "list":
+            self.thumb_frame.pack_forget()
+            self.tree_frame.pack(fill="both", expand=True)
+        else:
+            self.tree_frame.pack_forget()
+            self.thumb_frame.pack(fill="both", expand=True)
+
+        # Refresh the display
+        self._refresh_view()
+
+    def _refresh_view(self):
+        """Refresh current view (list or thumbnails)"""
+        if self.view_mode == "list":
+            self._refresh_tree_view()
+        else:
+            self._refresh_thumbnail_view()
+
+    def _on_thumb_canvas_configure(self, event):
+        """Handle canvas resize to adjust thumbnail grid"""
+        self.thumb_canvas.itemconfig(self.thumb_canvas_window, width=event.width)
+
+    def _refresh_thumbnail_view(self):
+        """Refresh thumbnail view - loads items incrementally to prevent freezing"""
+        # Clear existing thumbnails
+        for widget in self._thumb_widgets:
+            widget.destroy()
+        self._thumb_widgets.clear()
+
+        # Determine thumbnail size based on view mode
+        if self.view_mode == "medium":
+            thumb_size = 200
+        elif self.view_mode == "large":
+            thumb_size = 300
+        else:  # xlarge
+            thumb_size = 500
+
+        # Calculate columns dynamically based on available width
+        self.thumb_canvas.update_idletasks()
+        canvas_width = self.thumb_canvas.winfo_width()
+        if canvas_width < 100:
+            canvas_width = 600  # Default
+        columns = max(1, canvas_width // (thumb_size + 15))  # +15 for padding
+
+        # Get search pattern
+        pattern = self.search_var.get().strip() if hasattr(self, 'search_var') else ""
+
+        # Filter items
+        items_to_show = []
+        for item in self.items:
+            if pattern:
+                if not self._match_pattern(item.name, pattern):
+                    continue
+            items_to_show.append(item)
+
+        # Limit thumbnails to prevent freezing on large folders
+        max_thumbs = 50
+        showing_all = len(items_to_show) <= max_thumbs
+        items_to_display = items_to_show[:max_thumbs]
+
+        # Create thumbnail grid
+        row = 0
+        col = 0
+        for item in items_to_display:
+            thumb_widget = self._create_thumbnail(self.thumb_inner, item, thumb_size)
+            thumb_widget.grid(row=row, column=col, padx=5, pady=5, sticky="nw")
+            self._thumb_widgets.append(thumb_widget)
+
+            col += 1
+            if col >= columns:
+                col = 0
+                row += 1
+
+        # Add "Load More" button if there are more items
+        if not showing_all:
+            remaining = len(items_to_show) - max_thumbs
+            load_more = tk.Button(
+                self.thumb_inner,
+                text=f"📁 {remaining} more files - Use List View for large folders",
+                font=("Segoe UI", 14),
+                bg=COLORS["accent"],
+                fg="white",
+                padx=20,
+                pady=10
+            )
+            load_more.grid(row=row + 1, column=0, columnspan=columns, pady=20)
+            self._thumb_widgets.append(load_more)
+
+        # Update scroll region
+        self.thumb_inner.update_idletasks()
+        self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
+
+    def _get_windows_icon(self, path: str, size: int) -> 'Image':
+        """Extract Windows shell icon for a file/folder"""
+        try:
+            import win32api
+            import win32con
+            import win32ui
+            import win32gui
+            from PIL import Image
+
+            # Get large or extra large icon based on size
+            if size >= 200:
+                icon_size = win32con.SHGFI_LARGEICON
+                expected_size = 32
+            else:
+                icon_size = win32con.SHGFI_LARGEICON
+                expected_size = 32
+
+            # Get icon from shell
+            flags = win32con.SHGFI_ICON | icon_size
+            try:
+                info = win32gui.SHGetFileInfo(path, 0, flags)
+                hicon = info[0]
+                if not hicon:
+                    return None
+            except Exception:
+                return None
+
+            # Get icon info
+            icon_info = win32gui.GetIconInfo(hicon)
+            hbmColor = icon_info[4]
+
+            # Create device contexts
+            hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+            hbmp = win32ui.CreateBitmapFromHandle(hbmColor)
+
+            # Get bitmap info
+            bmp_info = hbmp.GetInfo()
+            width = bmp_info['bmWidth']
+            height = bmp_info['bmHeight']
+
+            # Create compatible DC and select bitmap
+            mem_dc = hdc.CreateCompatibleDC()
+            mem_dc.SelectObject(hbmp)
+
+            # Get bitmap bits
+            bmp_str = hbmp.GetBitmapBits(True)
+
+            # Create PIL image from bitmap
+            img = Image.frombuffer('RGBA', (width, height), bmp_str, 'raw', 'BGRA', 0, 1)
+
+            # Clean up
+            win32gui.DestroyIcon(hicon)
+            win32gui.DeleteObject(hbmColor)
+            if icon_info[3]:
+                win32gui.DeleteObject(icon_info[3])
+            mem_dc.DeleteDC()
+
+            # Scale up the icon to requested size
+            img = img.resize((size - 20, size - 20), Image.Resampling.LANCZOS)
+
+            return img
+        except Exception as e:
+            return None
+
+    def _create_thumbnail(self, parent, item: 'FileItem', size: int) -> tk.Frame:
+        """Create a thumbnail widget for a file"""
+        # Card size - image takes most of the space
+        img_size = size - 10  # Image area
+        frame = tk.Frame(parent, bg=COLORS["card_bg"], width=size, height=size + 50)
+        frame.pack_propagate(False)
+
+        # Try to load image thumbnail or Windows icon
+        ext = os.path.splitext(item.name)[1].lower()
+        image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif'}
+
+        thumb_label = tk.Label(frame, bg=COLORS["card_bg"], width=img_size, height=img_size)
+        thumb_label.pack(pady=5, expand=True)
+
+        photo = None
+        cache_key = f"{item.path}_{size}"
+
+        # Check cache first
+        if cache_key in self._thumb_cache:
+            photo = self._thumb_cache[cache_key]
+            thumb_label.configure(image=photo)
+            thumb_label.image = photo
+        elif ext in image_exts:
+            # Load image thumbnail directly (simpler, more stable)
+            try:
+                from PIL import Image, ImageTk
+                img = Image.open(item.path)
+                # Use thumbnail() for speed - only scales DOWN, fast
+                img.thumbnail((img_size, img_size), Image.Resampling.BILINEAR)
+
+                # Convert to RGB if needed
+                if img.mode != 'RGB':
+                    bg = Image.new('RGB', img.size, '#0047AB')
+                    if img.mode == 'RGBA':
+                        bg.paste(img, mask=img.split()[-1])
+                    else:
+                        bg.paste(img)
+                    img = bg
+
+                photo = ImageTk.PhotoImage(img)
+                self._thumb_cache[cache_key] = photo
+                thumb_label.configure(image=photo)
+                thumb_label.image = photo
+            except Exception:
+                self._set_emoji_icon(thumb_label, ext, item.is_dir, img_size)
+        else:
+            # Use emoji icons for non-image files (Windows shell icons are too small)
+            self._set_emoji_icon(thumb_label, ext, item.is_dir, img_size)
+
+        # File name label - bigger font, more text visible
+        max_chars = size // 8  # More chars for bigger thumbnails
+        display_name = item.name[:max_chars] + "..." if len(item.name) > max_chars else item.name
+        name_label = tk.Label(
+            frame,
+            text=display_name,
+            font=("Segoe UI", 12 if size >= 200 else 10),
+            fg=COLORS["text"],
+            bg=COLORS["card_bg"],
+            wraplength=size
+        )
+        name_label.pack(pady=4)
+
+        # Bind click events
+        def on_double_click(e, item=item):
+            if item.is_dir:
+                self.navigate_to(item.path)
+            else:
+                self._play_in_quickplayer()
+
+        def on_right_click(e, item=item):
+            self._select_item(item)
+            self._show_context_menu(e, item)
+
+        # Drag data for this thumbnail
+        drag_data = {"x": 0, "y": 0, "dragging": False}
+
+        def on_press(e, item=item):
+            drag_data["x"] = e.x_root
+            drag_data["y"] = e.y_root
+            drag_data["dragging"] = False
+            self._select_item(item)
+
+        def on_motion(e, item=item):
+            dx = abs(e.x_root - drag_data["x"])
+            dy = abs(e.y_root - drag_data["y"])
+            if dx > 30 or dy > 30:
+                drag_data["dragging"] = True
+
+        def on_release(e, item=item):
+            if drag_data["dragging"] and not item.is_dir:
+                # Dragged - send to QuickPlayer
+                self._play_in_quickplayer()
+            drag_data["dragging"] = False
+
+        def on_middle_click(e, item=item):
+            self._select_item(item)
+            if not item.is_dir:
+                self._play_in_quickplayer()
+
+        frame.bind("<ButtonPress-1>", on_press)
+        frame.bind("<B1-Motion>", on_motion)
+        frame.bind("<ButtonRelease-1>", on_release)
+        frame.bind("<Double-1>", on_double_click)
+        frame.bind("<Button-3>", on_right_click)
+        frame.bind("<Button-2>", on_middle_click)
+
+        thumb_label.bind("<ButtonPress-1>", on_press)
+        thumb_label.bind("<B1-Motion>", on_motion)
+        thumb_label.bind("<ButtonRelease-1>", on_release)
+        thumb_label.bind("<Double-1>", on_double_click)
+        thumb_label.bind("<Button-3>", on_right_click)
+        thumb_label.bind("<Button-2>", on_middle_click)
+
+        name_label.bind("<ButtonPress-1>", on_press)
+        name_label.bind("<B1-Motion>", on_motion)
+        name_label.bind("<ButtonRelease-1>", on_release)
+        name_label.bind("<Double-1>", on_double_click)
+        name_label.bind("<Button-3>", on_right_click)
+        name_label.bind("<Button-2>", on_middle_click)
+
+        # Bind mousewheel for scrolling (propagate to canvas)
+        frame.bind("<MouseWheel>", self._thumb_mousewheel_handler)
+        thumb_label.bind("<MouseWheel>", self._thumb_mousewheel_handler)
+        name_label.bind("<MouseWheel>", self._thumb_mousewheel_handler)
+
+        # Store item reference
+        frame.item = item
+
+        return frame
+
+    def _set_emoji_icon(self, label: tk.Label, ext: str, is_dir: bool, size: int):
+        """Set a large emoji icon for the file type"""
+        # Scale font size based on thumbnail size (bigger = bigger emoji)
+        font_size = max(48, size // 4)
+
+        if is_dir:
+            label.configure(text="📁", font=("Segoe UI Emoji", font_size), fg=COLORS["folder"])
+        elif ext in {'.mp4', '.avi', '.mkv', '.mov', '.webm', '.wmv', '.flv'}:
+            label.configure(text="🎬", font=("Segoe UI Emoji", font_size), fg="#FF6B6B")
+        elif ext in {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'}:
+            label.configure(text="🎵", font=("Segoe UI Emoji", font_size), fg="#9B59B6")
+        elif ext in {'.exe', '.msi'}:
+            label.configure(text="⚙️", font=("Segoe UI Emoji", font_size), fg="#3498DB")
+        elif ext in {'.pdf'}:
+            label.configure(text="📕", font=("Segoe UI Emoji", font_size), fg="#E74C3C")
+        elif ext in {'.doc', '.docx'}:
+            label.configure(text="📘", font=("Segoe UI Emoji", font_size), fg="#2980B9")
+        elif ext in {'.xls', '.xlsx'}:
+            label.configure(text="📗", font=("Segoe UI Emoji", font_size), fg="#27AE60")
+        elif ext in {'.ppt', '.pptx'}:
+            label.configure(text="📙", font=("Segoe UI Emoji", font_size), fg="#E67E22")
+        elif ext in {'.zip', '.rar', '.7z', '.tar', '.gz'}:
+            label.configure(text="📦", font=("Segoe UI Emoji", font_size), fg="#F39C12")
+        elif ext in {'.py', '.pyw'}:
+            label.configure(text="🐍", font=("Segoe UI Emoji", font_size), fg="#3498DB")
+        elif ext in {'.js', '.ts', '.jsx', '.tsx'}:
+            label.configure(text="📜", font=("Segoe UI Emoji", font_size), fg="#F1C40F")
+        elif ext in {'.html', '.htm'}:
+            label.configure(text="🌐", font=("Segoe UI Emoji", font_size), fg="#E67E22")
+        elif ext in {'.css', '.scss', '.sass'}:
+            label.configure(text="🎨", font=("Segoe UI Emoji", font_size), fg="#9B59B6")
+        elif ext in {'.json', '.xml', '.yaml', '.yml'}:
+            label.configure(text="📋", font=("Segoe UI Emoji", font_size), fg="#1ABC9C")
+        elif ext in {'.txt', '.log', '.md', '.markdown'}:
+            label.configure(text="📝", font=("Segoe UI Emoji", font_size), fg=COLORS["text"])
+        elif ext in {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico'}:
+            label.configure(text="🖼️", font=("Segoe UI Emoji", font_size), fg="#1ABC9C")
+        elif ext in {'.bat', '.cmd', '.ps1', '.sh'}:
+            label.configure(text="⚡", font=("Segoe UI Emoji", font_size), fg="#F1C40F")
+        elif ext in {'.dll', '.sys'}:
+            label.configure(text="🔧", font=("Segoe UI Emoji", font_size), fg="#7F8C8D")
+        elif ext in {'.iso', '.img'}:
+            label.configure(text="💿", font=("Segoe UI Emoji", font_size), fg="#9B59B6")
+        elif ext in {'.ttf', '.otf', '.woff', '.woff2'}:
+            label.configure(text="🔤", font=("Segoe UI Emoji", font_size), fg="#3498DB")
+        elif ext in {'.eddx', '.vsdx', '.drawio'}:
+            label.configure(text="📐", font=("Segoe UI Emoji", font_size), fg="#2ECC71")
+        else:
+            label.configure(text="📄", font=("Segoe UI Emoji", font_size), fg=COLORS["text"])
+
+    def _select_item(self, item: 'FileItem'):
+        """Select an item in thumbnail view"""
+        # Update visual selection
+        for widget in self._thumb_widgets:
+            if hasattr(widget, 'item') and widget.item == item:
+                widget.configure(bg=COLORS["accent"])
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Label):
+                        child.configure(bg=COLORS["accent"])
+            else:
+                widget.configure(bg=COLORS["card_bg"])
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Label):
+                        child.configure(bg=COLORS["card_bg"])
+
+        # Store selected item
+        self._selected_thumb_item = item
+
+        # Trigger selection callback
+        if self.on_selection_change:
+            self.on_selection_change([item.path])
+
+    def _show_context_menu(self, event, item: 'FileItem'):
+        """Show context menu for thumbnail item - same options as list view"""
+        # Set this item as selected for operations
+        self._selected_thumb_item = item
+
+        # Build menu with ALL the same options as _on_right_click
+        menu = Menu(self, tearoff=0, font=('Segoe UI', 18),
+                   bg=COLORS["card_bg"], fg=COLORS["text"],
+                   activebackground=COLORS["accent"], activeforeground=COLORS["text"])
+
+        menu.add_command(label="📂 Open", command=self._open_selected)
+        menu.add_command(label="📂 Open in Explorer", command=self._open_in_explorer)
+
+        # Check if file is media - add QuickPlayer and QuickMedia options
+        ext = os.path.splitext(item.path)[1].lower()
+        video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.webm', '.m4v', '.flv'}
+        audio_exts = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma'}
+        image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif'}
+        media_exts = video_exts | audio_exts
+
+        if not item.is_dir and (ext in media_exts or ext in image_exts):
+            menu.add_separator()
+            menu.add_command(label="🎬 Play in QuickPlayer", command=self._play_in_quickplayer)
+
+            # QuickMedia features submenu for audio/video
+            if ext in media_exts:
+                quickmedia_menu = Menu(menu, tearoff=0, font=('Segoe UI', 16),
+                                      bg=COLORS["card_bg"], fg=COLORS["text"],
+                                      activebackground=COLORS["accent"], activeforeground=COLORS["text"])
+                quickmedia_menu.add_command(label="🔊 Adjust Audio", command=lambda: self._open_audio_adjust(item.path))
+                quickmedia_menu.add_command(label="🔄 Convert To...", command=lambda: self._open_convert(item.path))
+                if ext in video_exts:
+                    quickmedia_menu.add_command(label="📱 Save for Mobile/Email", command=lambda: self._open_mobile_optimize(item.path))
+                menu.add_cascade(label="🎛️ QuickMedia", menu=quickmedia_menu)
+
+            # QuickImage features submenu for images
+            if ext in image_exts:
+                menu.add_command(label="✏️ Edit in QuickDrop", command=lambda: self._open_in_quickdrop(item.path))
+                quickimage_menu = Menu(menu, tearoff=0, font=('Segoe UI', 16),
+                                      bg=COLORS["card_bg"], fg=COLORS["text"],
+                                      activebackground=COLORS["accent"], activeforeground=COLORS["text"])
+                quickimage_menu.add_command(label="🔄 Convert Format...", command=lambda: self._open_image_convert(item.path))
+                quickimage_menu.add_command(label="📐 Resize Image...", command=lambda: self._open_image_resize(item.path))
+                quickimage_menu.add_command(label="✨ Adjust Quality...", command=lambda: self._open_image_quality(item.path))
+                menu.add_cascade(label="🖼️ QuickImage", menu=quickimage_menu)
+
+        menu.add_separator()
+        menu.add_command(label="🔄 Refresh", command=self.refresh)
+        menu.add_separator()
+        menu.add_command(label="📋 Copy", command=self._copy_selected)
+        menu.add_command(label="✂️ Cut (Move)", command=self._move_selected)
+        menu.add_command(label="📄 Paste", command=self._paste)
+        menu.add_separator()
+        menu.add_command(label="✏️ Rename", command=self._rename_selected)
+        menu.add_command(label="🗑️ Delete", command=self._delete_selected)
+        menu.add_separator()
+        menu.add_command(label="📁 New Folder", command=self._new_folder)
+        menu.add_separator()
+        menu.add_command(label="ℹ️ Properties", command=self._show_properties)
+
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
     def _load_directory(self):
         """Load directory contents into self.items"""
         self.items.clear()
@@ -1159,7 +2008,7 @@ class FileListPane(ctk.CTkFrame):
 
         # Sort and display
         self._sort_items()
-        self._refresh_tree_view()
+        self._refresh_view()
 
     def _refresh_tree_view(self):
         """Refresh the treeview with current items and search filter"""
@@ -1327,7 +2176,7 @@ class FileListPane(ctk.CTkFrame):
             self.sort_by = column
             self.sort_ascending = True
         self._sort_items()
-        self._refresh_tree_view()
+        self._refresh_view()
 
     def _on_double_click(self, event):
         """Handle double-click on treeview item"""
@@ -1408,6 +2257,8 @@ class FileListPane(ctk.CTkFrame):
             audio_exts = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma'}
             media_exts = video_exts | audio_exts
 
+            image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif'}
+
             if ext in media_exts:
                 menu.add_separator()
                 menu.add_command(label="🎬 Play in QuickPlayer", command=self._play_in_quickplayer)
@@ -1421,6 +2272,20 @@ class FileListPane(ctk.CTkFrame):
                 if ext in video_exts:
                     quickmedia_menu.add_command(label="📱 Save for Mobile/Email", command=lambda: self._open_mobile_optimize(paths[0]))
                 menu.add_cascade(label="🎛️ QuickMedia", menu=quickmedia_menu)
+
+            # QuickImage features submenu for images
+            if ext in image_exts:
+                menu.add_separator()
+                menu.add_command(label="🎬 View in QuickPlayer", command=self._play_in_quickplayer)
+                menu.add_command(label="✏️ Edit in QuickDrop", command=lambda: self._open_in_quickdrop(paths[0]))
+
+                quickimage_menu = Menu(menu, tearoff=0, font=('Segoe UI', 16),
+                                      bg=COLORS["card_bg"], fg=COLORS["text"],
+                                      activebackground=COLORS["accent"], activeforeground=COLORS["text"])
+                quickimage_menu.add_command(label="🔄 Convert Format...", command=lambda: self._open_image_convert(paths[0]))
+                quickimage_menu.add_command(label="📐 Resize Image...", command=lambda: self._open_image_resize(paths[0]))
+                quickimage_menu.add_command(label="✨ Adjust Quality...", command=lambda: self._open_image_quality(paths[0]))
+                menu.add_cascade(label="🖼️ QuickImage", menu=quickimage_menu)
 
         menu.add_separator()
         menu.add_command(label="🔄 Refresh", command=self.refresh)
@@ -1447,6 +2312,51 @@ class FileListPane(ctk.CTkFrame):
         if paths and hasattr(self, 'play_callback') and self.play_callback:
             self.play_callback(paths[0])
 
+    def _on_middle_click(self, event):
+        """Middle-click to instantly send file to QuickPlayer"""
+        item = self.tree.identify_row(event.y)
+        if item and item not in ("__parent__", "__searching__"):
+            self.tree.selection_set(item)
+            self._play_in_quickplayer()
+
+    def _on_drag_start(self, event):
+        """Start drag operation"""
+        item = self.tree.identify_row(event.y)
+        if item and item not in ("__parent__", "__searching__"):
+            self._drag_data["item"] = item
+            self._drag_data["x"] = event.x
+            self._drag_data["y"] = event.y
+        else:
+            self._drag_data["item"] = None
+
+    def _on_drag_motion(self, event):
+        """Handle drag motion - show drag cursor if moved enough"""
+        if self._drag_data["item"]:
+            # Only start visual drag if moved more than 10 pixels
+            dx = abs(event.x - self._drag_data["x"])
+            dy = abs(event.y - self._drag_data["y"])
+            if dx > 10 or dy > 10:
+                self.tree.configure(cursor="hand2")
+
+    def _on_drag_end(self, event):
+        """End drag operation - check if dropped on QuickPlayer"""
+        self.tree.configure(cursor="")
+
+        if not self._drag_data["item"]:
+            return
+
+        # Check if we moved enough to consider it a drag
+        dx = abs(event.x - self._drag_data["x"])
+        dy = abs(event.y - self._drag_data["y"])
+
+        if dx > 30 or dy > 30:  # Significant movement = drag to player
+            # Select the dragged item and send to player
+            item = self._drag_data["item"]
+            self.tree.selection_set(item)
+            self._play_in_quickplayer()
+
+        self._drag_data["item"] = None
+
     def _get_log_callback(self):
         """Get log callback from parent widget if available"""
         # Walk up the parent chain to find QuickFilesWidget
@@ -1468,6 +2378,33 @@ class FileListPane(ctk.CTkFrame):
     def _open_mobile_optimize(self, file_path: str):
         """Open mobile/email optimization dialog"""
         MobileEmailDialog(self.winfo_toplevel(), file_path, self._get_log_callback())
+
+    def _open_in_quickdrop(self, file_path: str):
+        """Open image in QuickDrop editor"""
+        quickdrop_path = r"D:\QuickDrop\quickdrop.py"
+        try:
+            # Use sys.executable to get current Python interpreter
+            import sys
+            subprocess.Popen([sys.executable, quickdrop_path, file_path])
+            if hasattr(self, '_get_log_callback') and self._get_log_callback():
+                self._get_log_callback()(f"Opened in QuickDrop: {os.path.basename(file_path)}", "success")
+        except Exception as e:
+            if hasattr(self, '_get_log_callback') and self._get_log_callback():
+                self._get_log_callback()(f"Error launching QuickDrop: {e}", "error")
+            import traceback
+            traceback.print_exc()
+
+    def _open_image_convert(self, file_path: str):
+        """Open image format conversion dialog"""
+        ImageConvertDialog(self.winfo_toplevel(), file_path, self._get_log_callback())
+
+    def _open_image_resize(self, file_path: str):
+        """Open image resize dialog"""
+        ImageResizeDialog(self.winfo_toplevel(), file_path, self._get_log_callback())
+
+    def _open_image_quality(self, file_path: str):
+        """Open image quality adjustment dialog"""
+        ImageQualityDialog(self.winfo_toplevel(), file_path, self._get_log_callback())
 
     def _open_in_explorer(self):
         """Open selected item in Windows Explorer"""
@@ -1506,8 +2443,15 @@ class FileListPane(ctk.CTkFrame):
             messagebox.showerror("Error", f"Cannot get properties: {e}")
 
     def get_selected_paths(self) -> List[str]:
-        """Get list of selected file paths from Treeview"""
+        """Get list of selected file paths from Treeview or Thumbnail view"""
         paths = []
+
+        # Check thumbnail selection first (if in thumbnail view mode)
+        if self.view_mode != "list" and hasattr(self, '_selected_thumb_item') and self._selected_thumb_item:
+            paths.append(self._selected_thumb_item.path)
+            return paths
+
+        # Otherwise check Treeview selection
         for item_id in self.tree.selection():
             if item_id == "__parent__":
                 continue
@@ -1873,9 +2817,9 @@ class QuickFilesWidget(ctk.CTkFrame):
             on_selection_change=lambda s: self._on_selection_change("left", s),
             play_callback=self.play_callback
         )
-        panes_frame.add(self.left_pane, weight=1)
+        panes_frame.add(self.left_pane, weight=3)  # 30% of total
 
-        # Right pane
+        # Right pane (smaller)
         self.right_pane = FileListPane(
             panes_frame,
             initial_path=self.right_path,
@@ -1883,7 +2827,7 @@ class QuickFilesWidget(ctk.CTkFrame):
             on_selection_change=lambda s: self._on_selection_change("right", s),
             play_callback=self.play_callback
         )
-        panes_frame.add(self.right_pane, weight=1)
+        panes_frame.add(self.right_pane, weight=1)  # 10% of total
 
         # Wire up context menu clipboard operations
         self.left_pane._copy_selected = lambda: self._clipboard_copy("left")
@@ -1998,6 +2942,9 @@ class QuickFilesWidget(ctk.CTkFrame):
         bind_key("<Control-c>", lambda e: self._clipboard_copy(self.active_pane))
         bind_key("<Control-x>", lambda e: self._clipboard_cut(self.active_pane))
         bind_key("<Control-v>", lambda e: self._clipboard_paste(self.active_pane))
+
+        # QuickPlayer shortcuts
+        bind_key("<Control-p>", lambda e: self._send_to_player())  # Ctrl+P to view in player
 
     def _get_active_pane(self) -> FileListPane:
         """Get the currently active pane"""
@@ -2217,6 +3164,11 @@ class QuickFilesWidget(ctk.CTkFrame):
         """Focus the path entry"""
         self._get_active_pane().path_entry.focus_set()
         self._get_active_pane().path_entry.select_range(0, "end")
+
+    def _send_to_player(self):
+        """Send selected file to QuickPlayer (Ctrl+P)"""
+        pane = self._get_active_pane()
+        pane._play_in_quickplayer()
 
     def _refresh_both(self):
         """Refresh both panes"""

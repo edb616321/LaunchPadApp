@@ -32,6 +32,10 @@
       "path": "C:\\Users\\edb616321\\Documents",
       "name": "Documents"
     },
+    "Screenshots": {
+      "path": "D:\\screenshots-new",
+      "name": "Screenshots"
+    },
     "F1": {
       "path": "D:\\",
       "name": "F1"
@@ -59,7 +63,7 @@
     "F10": null
   },
   "left_pane": {
-    "path": "C:\\Users\\edb616321",
+    "path": "D:\\screenshots-new",
     "show_tree": true
   },
   "right_pane": {
