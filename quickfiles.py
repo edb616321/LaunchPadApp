@@ -14,6 +14,10 @@ from tkinter import messagebox, Menu
 import threading
 import subprocess
 import shutil
+import ctypes
+import ctypes.wintypes
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 
 from file_operations import (
     FileOperationManager, OperationProgress, OperationType,
@@ -42,10 +46,16 @@ DEFAULT_BOOKMARKS = {
     "Home": {"path": "C:\\Users\\edb616321", "name": "Home"},
     "LaunchPad": {"path": "D:\\LaunchPadApp", "name": "LaunchPad"},
     "QuickTube": {"path": "D:\\QuickTube", "name": "QuickTube"},
-    "F:": {"path": "F:\\", "name": "F:"},
+    "G:": {"path": "G:\\", "name": "G: LARGE_DATA"},
+    "H:": {"path": "H:\\", "name": "H:"},
     "Downloads": {"path": "C:\\Users\\edb616321\\Downloads", "name": "Downloads"},
     "Desktop": {"path": "C:\\Users\\edb616321\\Desktop", "name": "Desktop"},
     "Documents": {"path": "C:\\Users\\edb616321\\Documents", "name": "Documents"},
+    "X:": {"path": "X:\\", "name": "X: nvme2 (251)"},
+    "M:": {"path": "M:\\", "name": "M:"},
+    "Y:": {"path": "Y:\\", "name": "Y: root (250)"},
+    "Z:": {"path": "Z:\\", "name": "Z: root (251)"},
+    "Screenshots": {"path": "D:\\screenshots-new", "name": "Screenshots"},
 }
 
 
@@ -1012,6 +1022,545 @@ class ImageQualityDialog(ctk.CTkToplevel):
             self._log(f"Error: {str(e)}", "error")
 
 
+class ThumbnailProvider:
+    """Generates real Windows thumbnails using IShellItemImageFactory COM API.
+
+    Provides content-aware thumbnails for any file type with a registered handler:
+    PDFs show page content, EXEs show real app icons, folders show folder icons, etc.
+    Falls back to SHGetFileInfo icons, then emoji as last resort.
+    """
+
+    # COM constants for IShellItemImageFactory
+    CLSID_ShellItem = None  # Not needed - we use SHCreateItemFromParsingName
+    IID_IShellItemImageFactory = None  # Set in _init_com_constants
+
+    # SIIGBF flags
+    SIIGBF_RESIZETOFIT = 0x00000000
+    SIIGBF_THUMBNAILONLY = 0x00000002
+    SIIGBF_ICONONLY = 0x00000004
+    SIIGBF_BIGGERSIZEOK = 0x00000001
+
+    def __init__(self, cache_dir: str, video_thumb_dir: str, max_workers: int = 6):
+        self._cache_dir = cache_dir
+        self._video_thumb_dir = video_thumb_dir
+        self._memory_cache = {}  # keyed by (path, mtime, size)
+        self._generation_id = 0
+        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="thumb")
+        self._placeholder_cache = {}  # keyed by (size, is_dir)
+
+        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(video_thumb_dir, exist_ok=True)
+
+        # Image extensions handled synchronously (PIL direct load)
+        self._image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif'}
+        # Video extensions handled via FFmpeg
+        self._video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.webm', '.wmv', '.flv', '.m4v'}
+
+    def invalidate(self):
+        """Increment generation counter - all pending callbacks become stale."""
+        self._generation_id += 1
+
+    def get_thumbnail(self, path: str, is_dir: bool, size: int, callback, widget) -> 'PhotoImage | None':
+        """Main entry point. Returns cached PhotoImage instantly, or None + schedules callback.
+
+        Args:
+            path: File/folder path
+            is_dir: Whether it's a directory
+            size: Thumbnail size in pixels (the image area, not card)
+            callback: callable(photo) called on main thread when ready
+            widget: tk widget for .after() scheduling
+        Returns:
+            PhotoImage if cache hit, None if generating in background
+        """
+        # Get mtime for cache key (gracefully handle SSHFS/network errors)
+        try:
+            mtime = os.path.getmtime(path)
+        except (OSError, TimeoutError):
+            mtime = 0
+
+        cache_key = (path, mtime, size)
+
+        # 1. Memory cache hit
+        if cache_key in self._memory_cache:
+            return self._memory_cache[cache_key]
+
+        ext = os.path.splitext(path)[1].lower()
+
+        # 2. Image files: synchronous PIL load (fast)
+        if ext in self._image_exts and not is_dir:
+            photo = self._load_image_sync(path, size, cache_key)
+            if photo:
+                return photo
+            # Fall through to shell thumbnail on failure
+
+        # 3. Video files: background FFmpeg
+        if ext in self._video_exts and not is_dir:
+            gen = self._generation_id
+            self._pool.submit(self._generate_video_thumbnail, path, size, gen, widget, callback, cache_key)
+            return None
+
+        # 4. Everything else: background IShellItemImageFactory
+        gen = self._generation_id
+        self._pool.submit(self._generate_shell_thumbnail, path, size, gen, widget, callback, cache_key)
+        return None
+
+    def get_placeholder(self, size: int, is_dir: bool) -> 'PhotoImage | None':
+        """Return a reusable placeholder icon (folder or generic file)."""
+        key = (size, is_dir)
+        if key in self._placeholder_cache:
+            return self._placeholder_cache[key]
+
+        try:
+            from PIL import Image, ImageDraw, ImageFont, ImageTk
+
+            img = Image.new('RGB', (size, size), COLORS["card_bg"])
+            draw = ImageDraw.Draw(img)
+
+            # Draw a simple folder or file icon
+            icon_text = "\U0001F4C1" if is_dir else "\U0001F4C4"  # folder or page emoji
+            try:
+                font = ImageFont.truetype("seguiemj.ttf", size // 3)
+            except Exception:
+                font = ImageFont.load_default()
+
+            bbox = draw.textbbox((0, 0), icon_text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            x = (size - tw) // 2
+            y = (size - th) // 2
+            draw.text((x, y), icon_text, font=font, fill="white")
+
+            photo = ImageTk.PhotoImage(img)
+            self._placeholder_cache[key] = photo
+            return photo
+        except Exception:
+            return None
+
+    def shutdown(self):
+        """Clean up thread pool."""
+        self._pool.shutdown(wait=False)
+
+    def _load_image_sync(self, path: str, size: int, cache_key) -> 'PhotoImage | None':
+        """Synchronously load an image file as a thumbnail."""
+        try:
+            from PIL import Image, ImageTk
+
+            img = Image.open(path)
+            img.thumbnail((size, size), Image.Resampling.BILINEAR)
+
+            # Composite RGBA onto card background color
+            if img.mode != 'RGB':
+                bg = Image.new('RGB', img.size, COLORS["card_bg"])
+                if img.mode == 'RGBA':
+                    bg.paste(img, mask=img.split()[-1])
+                else:
+                    bg.paste(img)
+                img = bg
+
+            photo = ImageTk.PhotoImage(img)
+            self._memory_cache[cache_key] = photo
+            return photo
+        except Exception:
+            return None
+
+    def _make_photo_on_main_thread(self, pil_img, cache_key, gen, widget, callback):
+        """Convert PIL Image to PhotoImage on main thread and invoke callback."""
+        def _do():
+            if gen != self._generation_id:
+                return
+            try:
+                from PIL import ImageTk
+                photo = ImageTk.PhotoImage(pil_img)
+                self._memory_cache[cache_key] = photo
+                callback(photo)
+            except Exception:
+                pass
+        widget.after(0, _do)
+
+    def _generate_shell_thumbnail(self, path: str, size: int, gen: int, widget, callback, cache_key):
+        """Generate thumbnail via IShellItemImageFactory (runs in thread pool)."""
+        try:
+            # COM must be initialized per-thread
+            ctypes.windll.ole32.CoInitialize(None)
+            try:
+                pil_img = self._try_shell_item_image_factory(path, size)
+                if pil_img is None:
+                    # Fallback: SHGetFileInfo
+                    pil_img = self._try_shgetfileinfo(path, size)
+
+                if pil_img is not None and gen == self._generation_id:
+                    self._make_photo_on_main_thread(pil_img, cache_key, gen, widget, callback)
+            finally:
+                ctypes.windll.ole32.CoUninitialize()
+        except Exception:
+            # Last resort: try SHGetFileInfo without full COM
+            try:
+                ctypes.windll.ole32.CoInitialize(None)
+                try:
+                    pil_img = self._try_shgetfileinfo(path, size)
+                    if pil_img is not None and gen == self._generation_id:
+                        self._make_photo_on_main_thread(pil_img, cache_key, gen, widget, callback)
+                finally:
+                    ctypes.windll.ole32.CoUninitialize()
+            except Exception:
+                pass
+
+    def _try_shell_item_image_factory(self, path: str, size: int) -> 'Image | None':
+        """Try to get thumbnail via IShellItemImageFactory COM interface. Returns PIL Image."""
+        from PIL import Image
+
+        # Check disk cache first (returns PIL Image)
+        disk_img = self._check_disk_cache_pil(path, size, "shell")
+        if disk_img:
+            return disk_img
+
+        try:
+            # Define COM interface GUIDs
+            IID_IShellItemImageFactory = comtypes_GUID('{bcc18b79-ba16-442f-80c4-8a59c30c463b}')
+
+            # SHCreateItemFromParsingName
+            SHCreateItemFromParsingName = ctypes.windll.shell32.SHCreateItemFromParsingName
+            SHCreateItemFromParsingName.argtypes = [
+                ctypes.c_wchar_p,  # pszPath
+                ctypes.c_void_p,   # pbc (bind context, NULL)
+                ctypes.POINTER(COM_GUID),  # riid
+                ctypes.POINTER(ctypes.c_void_p)  # ppv
+            ]
+            SHCreateItemFromParsingName.restype = ctypes.HRESULT
+
+            # Create IShellItem
+            shell_item = ctypes.c_void_p()
+            IID_IShellItem = comtypes_GUID('{43826d1e-e718-42ee-bc55-a1e261c37bfe}')
+            hr = SHCreateItemFromParsingName(path, None, ctypes.byref(IID_IShellItem), ctypes.byref(shell_item))
+            if hr != 0:
+                return None
+
+            try:
+                # QueryInterface for IShellItemImageFactory
+                factory = ctypes.c_void_p()
+                # IUnknown::QueryInterface is vtable[0]
+                vt = ctypes.cast(ctypes.cast(shell_item, ctypes.POINTER(ctypes.c_void_p))[0],
+                                 ctypes.POINTER(ctypes.c_void_p * 20))
+                # QueryInterface = vtable[0]
+                QueryInterface = ctypes.WINFUNCTYPE(
+                    ctypes.HRESULT,
+                    ctypes.c_void_p,  # this
+                    ctypes.POINTER(COM_GUID),  # riid
+                    ctypes.POINTER(ctypes.c_void_p)  # ppv
+                )(vt.contents[0])
+
+                hr = QueryInterface(shell_item, ctypes.byref(IID_IShellItemImageFactory), ctypes.byref(factory))
+                if hr != 0:
+                    return None
+
+                try:
+                    # IShellItemImageFactory::GetImage is vtable[3] (after QI, AddRef, Release)
+                    vt2 = ctypes.cast(ctypes.cast(factory, ctypes.POINTER(ctypes.c_void_p))[0],
+                                      ctypes.POINTER(ctypes.c_void_p * 20))
+
+                    # SIZE struct (cx, cy)
+                    class SIZE(ctypes.Structure):
+                        _fields_ = [("cx", ctypes.c_int), ("cy", ctypes.c_int)]
+
+                    GetImage = ctypes.WINFUNCTYPE(
+                        ctypes.HRESULT,
+                        ctypes.c_void_p,   # this
+                        SIZE,              # size
+                        ctypes.c_int,      # flags (SIIGBF)
+                        ctypes.POINTER(ctypes.c_void_p)  # phbmp
+                    )(vt2.contents[3])
+
+                    hbitmap = ctypes.c_void_p()
+                    sz = SIZE(size, size)
+                    # Try RESIZETOFIT first (content preview), fall back to ICONONLY
+                    hr = GetImage(factory, sz, self.SIIGBF_RESIZETOFIT | self.SIIGBF_BIGGERSIZEOK, ctypes.byref(hbitmap))
+                    if hr != 0:
+                        hr = GetImage(factory, sz, self.SIIGBF_ICONONLY, ctypes.byref(hbitmap))
+                    if hr != 0:
+                        return None
+
+                    try:
+                        # Convert HBITMAP to PIL Image
+                        img = self._hbitmap_to_pil(hbitmap.value, size)
+                        if img is None:
+                            return None
+
+                        # Save to disk cache
+                        self._save_disk_cache(path, size, img, "shell")
+
+                        return img
+                    finally:
+                        ctypes.windll.gdi32.DeleteObject(hbitmap)
+                finally:
+                    # Release factory
+                    Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt2.contents[2])
+                    Release(factory)
+            finally:
+                # Release shell_item
+                vt_item = ctypes.cast(ctypes.cast(shell_item, ctypes.POINTER(ctypes.c_void_p))[0],
+                                      ctypes.POINTER(ctypes.c_void_p * 20))
+                Release_item = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt_item.contents[2])
+                Release_item(shell_item)
+
+        except Exception:
+            return None
+
+    def _hbitmap_to_pil(self, hbitmap, target_size: int) -> 'Image | None':
+        """Convert a Windows HBITMAP handle to a PIL Image."""
+        try:
+            from PIL import Image
+
+            # BITMAP struct
+            class BITMAP(ctypes.Structure):
+                _fields_ = [
+                    ("bmType", ctypes.c_long),
+                    ("bmWidth", ctypes.c_long),
+                    ("bmHeight", ctypes.c_long),
+                    ("bmWidthBytes", ctypes.c_long),
+                    ("bmPlanes", ctypes.c_ushort),
+                    ("bmBitsPixel", ctypes.c_ushort),
+                    ("bmBits", ctypes.c_void_p),
+                ]
+
+            bmp = BITMAP()
+            ctypes.windll.gdi32.GetObjectW(hbitmap, ctypes.sizeof(BITMAP), ctypes.byref(bmp))
+
+            if bmp.bmWidth == 0 or bmp.bmHeight == 0:
+                return None
+
+            width, height = bmp.bmWidth, bmp.bmHeight
+
+            # BITMAPINFOHEADER
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", ctypes.c_uint32),
+                    ("biWidth", ctypes.c_int32),
+                    ("biHeight", ctypes.c_int32),
+                    ("biPlanes", ctypes.c_uint16),
+                    ("biBitCount", ctypes.c_uint16),
+                    ("biCompression", ctypes.c_uint32),
+                    ("biSizeImage", ctypes.c_uint32),
+                    ("biXPelsPerMeter", ctypes.c_int32),
+                    ("biYPelsPerMeter", ctypes.c_int32),
+                    ("biClrUsed", ctypes.c_uint32),
+                    ("biClrImportant", ctypes.c_uint32),
+                ]
+
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = width
+            bmi.biHeight = -height  # Top-down
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            bmi.biCompression = 0  # BI_RGB
+
+            buf_size = width * height * 4
+            buf = (ctypes.c_char * buf_size)()
+
+            hdc = ctypes.windll.user32.GetDC(0)
+            ctypes.windll.gdi32.GetDIBits(
+                hdc, hbitmap, 0, height,
+                buf, ctypes.byref(bmi), 0  # DIB_RGB_COLORS
+            )
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+
+            # Create PIL image from BGRA buffer
+            img = Image.frombuffer('RGBA', (width, height), bytes(buf), 'raw', 'BGRA', 0, 1)
+
+            # Composite onto card background for proper alpha
+            bg = Image.new('RGB', img.size, COLORS["card_bg"])
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+
+            # Resize to target if needed
+            if img.width != target_size or img.height != target_size:
+                img.thumbnail((target_size, target_size), Image.Resampling.LANCZOS)
+
+            return img
+        except Exception:
+            return None
+
+    def _try_shgetfileinfo(self, path: str, size: int) -> 'Image | None':
+        """Fallback: use SHGetFileInfo to get shell icon (32x32 scaled up). Returns PIL Image."""
+        try:
+            import win32gui
+            import win32con
+            from PIL import Image
+
+            # Check disk cache (returns PIL Image)
+            disk_img = self._check_disk_cache_pil(path, size, "icon")
+            if disk_img:
+                return disk_img
+
+            flags = win32con.SHGFI_ICON | win32con.SHGFI_LARGEICON
+            try:
+                info = win32gui.SHGetFileInfo(path, 0, flags)
+                hicon = info[0]
+                if not hicon:
+                    return None
+            except Exception:
+                return None
+
+            try:
+                icon_info = win32gui.GetIconInfo(hicon)
+                hbmColor = icon_info[4]
+
+                import win32ui
+                hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
+                hbmp = win32ui.CreateBitmapFromHandle(hbmColor)
+                bmp_info = hbmp.GetInfo()
+                w, h = bmp_info['bmWidth'], bmp_info['bmHeight']
+
+                mem_dc = hdc.CreateCompatibleDC()
+                mem_dc.SelectObject(hbmp)
+                bmp_str = hbmp.GetBitmapBits(True)
+
+                img = Image.frombuffer('RGBA', (w, h), bmp_str, 'raw', 'BGRA', 0, 1)
+
+                # Composite alpha
+                bg = Image.new('RGB', img.size, COLORS["card_bg"])
+                if img.mode == 'RGBA':
+                    bg.paste(img, mask=img.split()[3])
+                else:
+                    bg.paste(img)
+                img = bg
+
+                # Scale up to target size
+                img = img.resize((size - 20, size - 20), Image.Resampling.LANCZOS)
+
+                # Clean up
+                win32gui.DestroyIcon(hicon)
+                win32gui.DeleteObject(hbmColor)
+                if icon_info[3]:
+                    win32gui.DeleteObject(icon_info[3])
+                mem_dc.DeleteDC()
+
+                # Save to disk cache
+                self._save_disk_cache(path, size, img, "icon")
+
+                return img
+            except Exception:
+                win32gui.DestroyIcon(hicon)
+                return None
+        except Exception:
+            return None
+
+    def _generate_video_thumbnail(self, path: str, size: int, gen: int, widget, callback, cache_key):
+        """Generate video thumbnail via FFmpeg (runs in thread pool)."""
+        try:
+            from PIL import Image
+
+            # Check disk cache
+            path_hash = hashlib.md5(path.encode()).hexdigest()[:16]
+            thumb_path = os.path.join(self._video_thumb_dir, f"{path_hash}.jpg")
+
+            if os.path.exists(thumb_path):
+                try:
+                    video_mtime = os.path.getmtime(path)
+                    thumb_mtime = os.path.getmtime(thumb_path)
+                    if thumb_mtime > video_mtime:
+                        img = Image.open(thumb_path)
+                        img.thumbnail((size, size), Image.Resampling.BILINEAR)
+                        if gen == self._generation_id:
+                            self._make_photo_on_main_thread(img, cache_key, gen, widget, callback)
+                        return
+                except (OSError, TimeoutError):
+                    pass
+
+            # Probe for duration
+            probe_cmd = [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", path
+            ]
+            try:
+                result = subprocess.run(
+                    probe_cmd, capture_output=True, text=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                duration = float(result.stdout.strip())
+                seek_time = max(1, int(duration * 0.15))
+            except Exception:
+                seek_time = 30
+
+            # Extract frame
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(seek_time),
+                "-i", path,
+                "-vframes", "1",
+                "-vf", "scale=320:-1",
+                "-q:v", "5",
+                thumb_path
+            ]
+            subprocess.run(
+                cmd, capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+
+            if os.path.exists(thumb_path):
+                img = Image.open(thumb_path)
+                img.thumbnail((size, size), Image.Resampling.BILINEAR)
+                if gen == self._generation_id:
+                    self._make_photo_on_main_thread(img, cache_key, gen, widget, callback)
+        except Exception:
+            pass
+
+    def _disk_cache_path(self, path: str, size: int, prefix: str) -> str:
+        """Get disk cache file path for a given source path and size."""
+        try:
+            mtime = os.path.getmtime(path)
+        except (OSError, TimeoutError):
+            mtime = 0
+        key_str = f"{path}|{mtime}|{size}"
+        file_hash = hashlib.md5(key_str.encode()).hexdigest()[:16]
+        return os.path.join(self._cache_dir, f"{prefix}_{file_hash}_{size}.jpg")
+
+    def _check_disk_cache_pil(self, path: str, size: int, prefix: str) -> 'Image | None':
+        """Check disk cache for a previously generated thumbnail. Returns PIL Image (thread-safe)."""
+        try:
+            from PIL import Image
+            cache_path = self._disk_cache_path(path, size, prefix)
+            if os.path.exists(cache_path):
+                img = Image.open(cache_path)
+                img.load()  # Force load before returning (file handle)
+                return img
+        except Exception:
+            pass
+        return None
+
+    def _save_disk_cache(self, path: str, size: int, img: 'Image', prefix: str):
+        """Save a PIL Image to the disk cache."""
+        try:
+            cache_path = self._disk_cache_path(path, size, prefix)
+            img.save(cache_path, "JPEG", quality=85)
+        except Exception:
+            pass
+
+
+class COM_GUID(ctypes.Structure):
+    """Windows COM GUID structure."""
+    _fields_ = [
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+def comtypes_GUID(guid_str: str) -> COM_GUID:
+    """Create a COM_GUID from a string like '{bcc18b79-ba16-442f-80c4-8a59c30c463b}'."""
+    import uuid
+    u = uuid.UUID(guid_str)
+    g = COM_GUID()
+    g.Data1 = u.time_low
+    g.Data2 = u.time_mid
+    g.Data3 = u.time_hi_version
+    g.Data4[0] = u.clock_seq_hi_variant
+    g.Data4[1] = u.clock_seq_low
+    for i in range(6):
+        g.Data4[2 + i] = u.node >> (8 * (5 - i)) & 0xFF
+    return g
+
+
 class FileListPane(ctk.CTkFrame):
     """Single pane showing file list - using native Treeview for speed"""
 
@@ -1032,8 +1581,9 @@ class FileListPane(ctk.CTkFrame):
         self.on_path_change = on_path_change
         self.on_selection_change = on_selection_change
         self.play_callback = play_callback  # Callback to play media in QuickPlayer
-        self.sort_by = "name"
-        self.sort_ascending = True
+        self.sort_by = "modified"
+        self.sort_ascending = False  # Newest first by default
+        self._thumb_display_count = 0  # For pagination in thumbnail view
         self.show_hidden = False
 
         # Navigation history (like browser back/forward)
@@ -1043,6 +1593,12 @@ class FileListPane(ctk.CTkFrame):
 
         self._setup_ui()
         self.navigate_to(initial_path)
+
+    def destroy(self):
+        """Clean up thread pool on widget destruction."""
+        if hasattr(self, '_thumb_provider'):
+            self._thumb_provider.shutdown()
+        super().destroy()
 
     def _setup_ui(self):
         """Setup the pane UI with native Treeview for speed"""
@@ -1152,6 +1708,30 @@ class FileListPane(ctk.CTkFrame):
         )
         self.recursive_checkbox.pack(side="left", padx=(0, 10))
 
+        # New Folder button
+        ctk.CTkButton(
+            search_row,
+            text="+ Folder",
+            width=120,
+            height=38,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent"],
+            command=self._new_folder
+        ).pack(side="left", padx=(0, 5))
+
+        # New File button
+        ctk.CTkButton(
+            search_row,
+            text="+ File",
+            width=100,
+            height=38,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent"],
+            command=self._new_file
+        ).pack(side="left", padx=(0, 10))
+
         # Search result label - shows match count - BIGGER FONT
         self.search_result_label = ctk.CTkLabel(
             search_row,
@@ -1215,6 +1795,16 @@ class FileListPane(ctk.CTkFrame):
         )
         self.view_xlarge_btn.pack(side="left", padx=5)
 
+        # Refresh button
+        self.refresh_btn = ctk.CTkButton(
+            view_row, text="🔄 Refresh", width=130, height=45,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["accent_hover"],
+            command=self._refresh_current_view
+        )
+        self.refresh_btn.pack(side="left", padx=(20, 5))
+
         # Style for Treeview - dark theme with BIG fonts
         style = ttk.Style()
         style.theme_use('clam')
@@ -1275,8 +1865,15 @@ class FileListPane(ctk.CTkFrame):
         self.thumb_inner.bind("<MouseWheel>", _on_mousewheel)
         self.thumb_frame.bind("<MouseWheel>", _on_mousewheel)
 
-        # Thumbnail cache and selection
-        self._thumb_cache = {}
+        # Thumbnail provider (real Windows shell thumbnails)
+        self._video_thumb_dir = os.path.join(os.path.dirname(__file__), "video_thumbs")
+        self._shell_thumb_dir = os.path.join(os.path.dirname(__file__), "shell_thumbs")
+        self._thumb_provider = ThumbnailProvider(
+            cache_dir=self._shell_thumb_dir,
+            video_thumb_dir=self._video_thumb_dir,
+            max_workers=6
+        )
+        self._thumb_cache = {}  # kept for legacy video callback compat
         self._thumb_widgets = []
         self._selected_thumb_item = None
 
@@ -1293,7 +1890,7 @@ class FileListPane(ctk.CTkFrame):
         # Configure columns with alignment
         self.tree.heading("name", text="Name", command=lambda: self._sort_by("name"))
         self.tree.heading("size", text="Size", command=lambda: self._sort_by("size"))
-        self.tree.heading("created", text="Created", command=lambda: self._sort_by("created"))
+        self.tree.heading("created", text="Added", command=lambda: self._sort_by("created"))
         self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
 
         self.tree.column("name", width=300, minwidth=150, anchor="w")
@@ -1582,16 +2179,31 @@ class FileListPane(ctk.CTkFrame):
         else:
             self._refresh_thumbnail_view()
 
+    def _refresh_current_view(self):
+        """Reload directory from disk and refresh view - for manual refresh button"""
+        if self.current_path:
+            self._load_directory()
+            self._refresh_view()
+
     def _on_thumb_canvas_configure(self, event):
         """Handle canvas resize to adjust thumbnail grid"""
         self.thumb_canvas.itemconfig(self.thumb_canvas_window, width=event.width)
 
-    def _refresh_thumbnail_view(self):
+    def _scroll_to_top(self):
+        """Scroll thumbnail view back to top"""
+        self.thumb_canvas.yview_moveto(0)
+
+    def _refresh_thumbnail_view(self, load_more=False):
         """Refresh thumbnail view - loads items incrementally to prevent freezing"""
-        # Clear existing thumbnails
-        for widget in self._thumb_widgets:
-            widget.destroy()
-        self._thumb_widgets.clear()
+        BATCH_SIZE = 100  # Load 100 items at a time
+
+        if not load_more:
+            # Full refresh - clear everything and reset counter
+            self._thumb_provider.invalidate()  # Discard pending background thumbnails
+            for widget in self._thumb_widgets:
+                widget.destroy()
+            self._thumb_widgets.clear()
+            self._thumb_display_count = 0
 
         # Determine thumbnail size based on view mode
         if self.view_mode == "medium":
@@ -1610,23 +2222,41 @@ class FileListPane(ctk.CTkFrame):
 
         # Get search pattern
         pattern = self.search_var.get().strip() if hasattr(self, 'search_var') else ""
+        recursive = self.recursive_var.get() if hasattr(self, 'recursive_var') else False
+
+        # Determine source items - use recursive results if in recursive search mode
+        if recursive and pattern and hasattr(self, 'recursive_results') and self.recursive_results:
+            source_items = self.recursive_results
+        else:
+            source_items = self.items
 
         # Filter items
         items_to_show = []
-        for item in self.items:
-            if pattern:
+        for item in source_items:
+            if pattern and source_items is self.items:
+                # Only filter if using self.items (recursive results are already filtered)
                 if not self._match_pattern(item.name, pattern):
                     continue
             items_to_show.append(item)
 
-        # Limit thumbnails to prevent freezing on large folders
-        max_thumbs = 50
-        showing_all = len(items_to_show) <= max_thumbs
-        items_to_display = items_to_show[:max_thumbs]
+        # Get the next batch of items
+        start_idx = self._thumb_display_count
+        end_idx = start_idx + BATCH_SIZE
+        items_to_display = items_to_show[start_idx:end_idx]
 
-        # Create thumbnail grid
-        row = 0
-        col = 0
+        # Calculate starting grid position
+        row = self._thumb_display_count // columns
+        col = self._thumb_display_count % columns
+
+        # Remove old "Load More" button if loading more
+        if load_more and self._thumb_widgets:
+            # Check if last widget is the load more button
+            last_widget = self._thumb_widgets[-1]
+            if hasattr(last_widget, '_is_load_more'):
+                last_widget.destroy()
+                self._thumb_widgets.pop()
+
+        # Create thumbnail grid for this batch
         for item in items_to_display:
             thumb_widget = self._create_thumbnail(self.thumb_inner, item, thumb_size)
             thumb_widget.grid(row=row, column=col, padx=5, pady=5, sticky="nw")
@@ -1637,20 +2267,59 @@ class FileListPane(ctk.CTkFrame):
                 col = 0
                 row += 1
 
-        # Add "Load More" button if there are more items
-        if not showing_all:
-            remaining = len(items_to_show) - max_thumbs
-            load_more = tk.Button(
-                self.thumb_inner,
-                text=f"📁 {remaining} more files - Use List View for large folders",
-                font=("Segoe UI", 14),
+        # Navigation buttons row
+        total_items = len(items_to_show)
+
+        # Update the display count (cap at total items to show correct status)
+        self._thumb_display_count = min(end_idx, total_items)
+        nav_row = row + 1
+
+        # Create a frame for navigation buttons
+        nav_frame = tk.Frame(self.thumb_inner, bg=COLORS["bg_dark"])
+        nav_frame.grid(row=nav_row, column=0, columnspan=columns, pady=20)
+        nav_frame._is_load_more = True  # Mark for removal on load more
+        self._thumb_widgets.append(nav_frame)
+
+        # "Back to Top" button - only show if we've loaded more than first batch
+        if self._thumb_display_count > BATCH_SIZE:
+            back_to_top_btn = tk.Button(
+                nav_frame,
+                text="⬆️ Back to Top",
+                font=("Segoe UI", 16, "bold"),
+                bg=COLORS["card_bg"],
+                fg="white",
+                padx=20,
+                pady=12,
+                cursor="hand2",
+                command=self._scroll_to_top
+            )
+            back_to_top_btn.pack(side="left", padx=10)
+
+        # Show status
+        status_label = tk.Label(
+            nav_frame,
+            text=f"Showing {self._thumb_display_count} of {total_items}",
+            font=("Segoe UI", 14),
+            bg=COLORS["bg_dark"],
+            fg=COLORS["text"]
+        )
+        status_label.pack(side="left", padx=20)
+
+        # "Load More" button if there are more items
+        if self._thumb_display_count < total_items:
+            remaining = total_items - self._thumb_display_count
+            load_more_btn = tk.Button(
+                nav_frame,
+                text=f"📁 Load Next 100 ({remaining} remaining)",
+                font=("Segoe UI", 16, "bold"),
                 bg=COLORS["accent"],
                 fg="white",
                 padx=20,
-                pady=10
+                pady=12,
+                cursor="hand2",
+                command=lambda: self._refresh_thumbnail_view(load_more=True)
             )
-            load_more.grid(row=row + 1, column=0, columnspan=columns, pady=20)
-            self._thumb_widgets.append(load_more)
+            load_more_btn.pack(side="left", padx=10)
 
         # Update scroll region
         self.thumb_inner.update_idletasks()
@@ -1727,60 +2396,50 @@ class FileListPane(ctk.CTkFrame):
         frame = tk.Frame(parent, bg=COLORS["card_bg"], width=size, height=size + 50)
         frame.pack_propagate(False)
 
-        # Try to load image thumbnail or Windows icon
         ext = os.path.splitext(item.name)[1].lower()
-        image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif'}
 
-        thumb_label = tk.Label(frame, bg=COLORS["card_bg"], width=img_size, height=img_size)
-        thumb_label.pack(pady=5, expand=True)
+        thumb_label = tk.Label(frame, bg=COLORS["card_bg"])
+        thumb_label.pack(pady=5, expand=True, fill="both")
 
-        photo = None
-        cache_key = f"{item.path}_{size}"
+        # Callback for when background thumbnail is ready
+        def on_ready(photo, label=thumb_label):
+            if photo and label.winfo_exists():
+                label.configure(image=photo, text="")
+                label.image = photo
 
-        # Check cache first
-        if cache_key in self._thumb_cache:
-            photo = self._thumb_cache[cache_key]
+        # Ask ThumbnailProvider (handles images, videos, shell thumbs, caching)
+        photo = self._thumb_provider.get_thumbnail(item.path, item.is_dir, img_size, on_ready, self)
+        if photo:
+            # Cache hit - show immediately
             thumb_label.configure(image=photo)
             thumb_label.image = photo
-        elif ext in image_exts:
-            # Load image thumbnail directly (simpler, more stable)
-            try:
-                from PIL import Image, ImageTk
-                img = Image.open(item.path)
-                # Use thumbnail() for speed - only scales DOWN, fast
-                img.thumbnail((img_size, img_size), Image.Resampling.BILINEAR)
-
-                # Convert to RGB if needed
-                if img.mode != 'RGB':
-                    bg = Image.new('RGB', img.size, '#0047AB')
-                    if img.mode == 'RGBA':
-                        bg.paste(img, mask=img.split()[-1])
-                    else:
-                        bg.paste(img)
-                    img = bg
-
-                photo = ImageTk.PhotoImage(img)
-                self._thumb_cache[cache_key] = photo
-                thumb_label.configure(image=photo)
-                thumb_label.image = photo
-            except Exception:
-                self._set_emoji_icon(thumb_label, ext, item.is_dir, img_size)
         else:
-            # Use emoji icons for non-image files (Windows shell icons are too small)
+            # Show emoji placeholder while background generates
             self._set_emoji_icon(thumb_label, ext, item.is_dir, img_size)
 
-        # File name label - bigger font, more text visible
-        max_chars = size // 8  # More chars for bigger thumbnails
+        # File name label - scale font with thumbnail size
+        max_chars = size // 6  # More chars for bigger thumbnails
         display_name = item.name[:max_chars] + "..." if len(item.name) > max_chars else item.name
+
+        # Scale font size based on thumbnail size
+        if size >= 300:
+            font_size = 18  # XL view
+        elif size >= 200:
+            font_size = 14  # Large view
+        elif size >= 150:
+            font_size = 12  # Medium view
+        else:
+            font_size = 10  # Small view
+
         name_label = tk.Label(
             frame,
             text=display_name,
-            font=("Segoe UI", 12 if size >= 200 else 10),
+            font=("Segoe UI", font_size, "bold"),
             fg=COLORS["text"],
             bg=COLORS["card_bg"],
             wraplength=size
         )
-        name_label.pack(pady=4)
+        name_label.pack(pady=6)
 
         # Bind click events
         def on_double_click(e, item=item):
@@ -1849,6 +2508,78 @@ class FileListPane(ctk.CTkFrame):
         frame.item = item
 
         return frame
+
+    def _extract_video_thumbnail_async(self, video_path: str, size: int, callback):
+        """Extract video thumbnail in background thread using FFmpeg (non-blocking)"""
+        def extract():
+            try:
+                from PIL import Image, ImageTk
+                import hashlib
+
+                # Create hash for cache filename
+                path_hash = hashlib.md5(video_path.encode()).hexdigest()[:16]
+                thumb_path = os.path.join(self._video_thumb_dir, f"{path_hash}.jpg")
+
+                # Check disk cache first
+                if os.path.exists(thumb_path):
+                    try:
+                        video_mtime = os.path.getmtime(video_path)
+                        thumb_mtime = os.path.getmtime(thumb_path)
+                        if thumb_mtime > video_mtime:
+                            img = Image.open(thumb_path)
+                            img.thumbnail((size, size), Image.Resampling.BILINEAR)
+                            # Schedule callback on main thread
+                            self.after(0, lambda: callback(ImageTk.PhotoImage(img)))
+                            return
+                    except:
+                        pass
+
+                # Get video duration first (fast)
+                probe_cmd = [
+                    "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", video_path
+                ]
+                try:
+                    result = subprocess.run(
+                        probe_cmd, capture_output=True, text=True, timeout=3,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    )
+                    duration = float(result.stdout.strip())
+                    # Seek to 15% of video (avoids intro logos)
+                    seek_time = max(1, int(duration * 0.15))
+                except:
+                    seek_time = 30  # Fallback: 30 seconds in
+
+                # Extract frame using FFmpeg with FAST seeking (-ss before -i)
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(seek_time),  # Seek BEFORE input (fast keyframe seek)
+                    "-i", video_path,
+                    "-vframes", "1",
+                    "-vf", "scale=320:-1",  # Small size, maintain aspect
+                    "-q:v", "5",  # Lower quality = faster
+                    thumb_path
+                ]
+
+                subprocess.run(
+                    cmd, capture_output=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+
+                if os.path.exists(thumb_path):
+                    img = Image.open(thumb_path)
+                    img.thumbnail((size, size), Image.Resampling.BILINEAR)
+                    # Schedule callback on main thread
+                    self.after(0, lambda: callback(ImageTk.PhotoImage(img)))
+                else:
+                    self.after(0, lambda: callback(None))
+
+            except Exception:
+                self.after(0, lambda: callback(None))
+
+        # Run in background thread
+        thread = threading.Thread(target=extract, daemon=True)
+        thread.start()
 
     def _set_emoji_icon(self, label: tk.Label, ext: str, is_dir: bool, size: int):
         """Set a large emoji icon for the file type"""
@@ -2046,8 +2777,9 @@ class FileListPane(ctk.CTkFrame):
             else:
                 size_str = format_size(item.size)
 
-            # Get dates
-            created_str = self._format_datetime(item.created) if hasattr(item, 'created') and item.created else ""
+            # Get dates - use created time, fall back to modified if created is 0
+            created_val = item.created or item.modified
+            created_str = self._format_datetime(created_val) if created_val else ""
             modified_str = self._format_datetime(item.modified) if item.modified else ""
 
             self.tree.insert("", "end", iid=str(idx),
@@ -2090,8 +2822,9 @@ class FileListPane(ctk.CTkFrame):
             else:
                 size_str = format_size(item.size)
 
-            # Get dates
-            created_str = self._format_datetime(item.created) if hasattr(item, 'created') and item.created else ""
+            # Get dates - use created time, fall back to modified if created is 0
+            created_val = item.created or item.modified
+            created_str = self._format_datetime(created_val) if created_val else ""
             modified_str = self._format_datetime(item.modified) if item.modified else ""
 
             # Use "r_" prefix for recursive results to distinguish from regular items
@@ -2161,7 +2894,7 @@ class FileListPane(ctk.CTkFrame):
             elif self.sort_by == "modified":
                 return item.modified if item.modified else 0
             elif self.sort_by == "created":
-                return item.created if hasattr(item, 'created') and item.created else 0
+                return (item.created or item.modified or 0)
             return item.name.lower()
 
         dirs.sort(key=sort_key, reverse=not self.sort_ascending)
@@ -2657,6 +3390,59 @@ class FileListPane(ctk.CTkFrame):
             command=dialog.destroy
         ).pack(side="left", padx=5)
 
+    def _new_file(self):
+        """Create new file"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("New File")
+        dialog.geometry("400x120")
+        dialog.configure(fg_color=COLORS["bg_dark"])
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="File name:",
+            font=ctk.CTkFont(size=14),
+            text_color=COLORS["text"]
+        ).pack(pady=(20, 5))
+
+        entry = ctk.CTkEntry(dialog, width=350, height=35)
+        entry.insert(0, "new_file.txt")
+        entry.pack(pady=5)
+        entry.select_range(0, entry.get().rfind('.'))  # Select name without extension
+        entry.focus_set()
+
+        def do_create():
+            name = entry.get().strip()
+            if name:
+                new_path = os.path.join(self.current_path, name)
+                try:
+                    if os.path.exists(new_path):
+                        messagebox.showerror("Error", f"File '{name}' already exists.")
+                        return
+                    with open(new_path, 'w') as f:
+                        pass  # Create empty file
+                    self.refresh()
+                except Exception as e:
+                    messagebox.showerror("Error", str(e))
+            dialog.destroy()
+
+        entry.bind("<Return>", lambda e: do_create())
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(pady=10)
+
+        ctk.CTkButton(
+            btn_frame, text="Create", width=100,
+            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+            command=do_create
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame, text="Cancel", width=100,
+            fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
+            command=dialog.destroy
+        ).pack(side="left", padx=5)
+
 
 class QuickFilesWidget(ctk.CTkFrame):
     """Main QuickFiles dual-pane file manager widget"""
@@ -2707,13 +3493,13 @@ class QuickFilesWidget(ctk.CTkFrame):
                     self.bookmarks.update(loaded_bookmarks)
 
                     self.left_path = config.get("left_pane", {}).get("path", "D:\\")
-                    self.right_path = config.get("right_pane", {}).get("path", "F:\\")
+                    self.right_path = config.get("right_pane", {}).get("path", "G:\\")
                     return
             except Exception as e:
                 print(f"Error loading QuickFiles config: {e}")
 
         self.left_path = "D:\\"
-        self.right_path = "F:\\"
+        self.right_path = "G:\\"
 
     def _save_config(self):
         """Save configuration to JSON"""
@@ -2760,6 +3546,9 @@ class QuickFilesWidget(ctk.CTkFrame):
 
         self.bookmark_buttons = {}
         for key, bookmark in self.bookmarks.items():
+            # Skip F-key bookmarks (F1-F10) - those are keyboard-only
+            if key.startswith("F") and key[1:].isdigit():
+                continue
             if bookmark and bookmark.get("path"):
                 name = bookmark.get("name", key)
                 btn = ctk.CTkButton(
@@ -2910,14 +3699,15 @@ class QuickFilesWidget(ctk.CTkFrame):
 
     def _bind_keys(self):
         """Bind keyboard shortcuts to the widget"""
-        # Bind to self and propagate to children
+        # Bind to self, panes, AND tree widgets (tree has focus when files selected)
         def bind_key(key, callback):
             self.bind(key, callback)
-            # Also bind to panes after they exist
             if hasattr(self, 'left_pane'):
                 self.left_pane.bind(key, callback)
+                self.left_pane.tree.bind(key, callback)
             if hasattr(self, 'right_pane'):
                 self.right_pane.bind(key, callback)
+                self.right_pane.tree.bind(key, callback)
 
         # Function key bookmarks (F1-F10)
         for i in range(1, 11):
@@ -3139,18 +3929,28 @@ class QuickFilesWidget(ctk.CTkFrame):
         results: List[FileOperationResult],
         *panes_to_refresh
     ):
-        """Handle operation completion"""
+        """Handle operation completion (called from background thread)"""
         success = sum(1 for r in results if r.success)
         failed = len(results) - success
+        errors = [r.error for r in results if r.error]
 
-        if failed == 0:
-            self._log(f"{op_name} complete: {success} items", "success")
-        else:
-            self._log(f"{op_name}: {success} succeeded, {failed} failed", "warning")
+        def _finish():
+            if failed == 0:
+                self._log(f"{op_name} complete: {success} items", "success")
+            else:
+                self._log(f"{op_name}: {success} succeeded, {failed} failed", "warning")
+                # Show error details
+                if errors:
+                    error_msg = "\n".join(errors[:5])
+                    messagebox.showerror(f"{op_name} Error",
+                        f"{failed} item(s) failed:\n\n{error_msg}")
+            for p in panes_to_refresh:
+                if p:
+                    p.refresh()
+            self._update_status()
 
-        # Refresh panes
-        self.after(0, lambda: [p.refresh() for p in panes_to_refresh if p])
-        self.after(0, self._update_status)
+        # Schedule on GUI thread
+        self.after(0, _finish)
 
     def _rename_selected(self):
         """Rename selected item"""
@@ -3159,6 +3959,10 @@ class QuickFilesWidget(ctk.CTkFrame):
     def _new_folder(self):
         """Create new folder"""
         self._get_active_pane()._new_folder()
+
+    def _new_file(self):
+        """Create new file"""
+        self._get_active_pane()._new_file()
 
     def _focus_path_entry(self):
         """Focus the path entry"""
@@ -3176,6 +3980,71 @@ class QuickFilesWidget(ctk.CTkFrame):
         self.right_pane.refresh()
         self._log("Refreshed file lists", "info")
 
+    def _get_windows_clipboard_files(self) -> List[str]:
+        """Get file paths from Windows clipboard (CF_HDROP format)"""
+        CF_HDROP = 15
+        files = []
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            shell32 = ctypes.windll.shell32
+
+            if not user32.OpenClipboard(0):
+                return []
+            try:
+                if not user32.IsClipboardFormatAvailable(CF_HDROP):
+                    return []
+                h_drop = user32.GetClipboardData(CF_HDROP)
+                if not h_drop:
+                    return []
+                # DragQueryFileW with index 0xFFFFFFFF returns file count
+                count = shell32.DragQueryFileW(h_drop, 0xFFFFFFFF, None, 0)
+                for i in range(count):
+                    buf_size = shell32.DragQueryFileW(h_drop, i, None, 0) + 1
+                    buf = ctypes.create_unicode_buffer(buf_size)
+                    shell32.DragQueryFileW(h_drop, i, buf, buf_size)
+                    files.append(buf.value)
+            finally:
+                user32.CloseClipboard()
+        except Exception:
+            pass
+        return files
+
+    def _set_windows_clipboard_files(self, paths: List[str]):
+        """Put file paths onto Windows clipboard as CF_HDROP"""
+        CF_HDROP = 15
+        try:
+            import struct
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            # Build DROPFILES structure + null-terminated file list
+            # DROPFILES: pFiles(DWORD) + pt.x(LONG) + pt.y(LONG) + fNC(BOOL) + fWide(BOOL)
+            offset = 20  # sizeof(DROPFILES)
+            file_list = "\0".join(paths) + "\0\0"
+            data = struct.pack("IiiII", offset, 0, 0, 0, 1)  # fWide=1 for Unicode
+            data += file_list.encode("utf-16-le")
+
+            GMEM_MOVEABLE = 0x0002
+            h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            if not h_global:
+                return
+            locked = kernel32.GlobalLock(h_global)
+            if not locked:
+                kernel32.GlobalFree(h_global)
+                return
+            ctypes.memmove(locked, data, len(data))
+            kernel32.GlobalUnlock(h_global)
+
+            if user32.OpenClipboard(0):
+                try:
+                    user32.EmptyClipboard()
+                    user32.SetClipboardData(CF_HDROP, h_global)
+                finally:
+                    user32.CloseClipboard()
+        except Exception:
+            pass
+
     def _clipboard_copy(self, pane: str):
         """Copy selected files to clipboard"""
         source_pane = self.left_pane if pane == "left" else self.right_pane
@@ -3187,6 +4056,8 @@ class QuickFilesWidget(ctk.CTkFrame):
 
         self.clipboard_paths = paths
         self.clipboard_operation = "copy"
+        # Also put on Windows clipboard so files can be pasted in Explorer
+        self._set_windows_clipboard_files(paths)
         self._log(f"Copied {len(paths)} item(s) to clipboard", "info")
         self._update_status()
 
@@ -3206,40 +4077,51 @@ class QuickFilesWidget(ctk.CTkFrame):
 
     def _clipboard_paste(self, pane: str):
         """Paste files from clipboard to specified pane"""
-        if not self.clipboard_paths:
-            messagebox.showinfo("Paste", "Clipboard is empty. Copy or cut files first.")
-            return
+        # Try internal clipboard first, fall back to Windows clipboard
+        paths_to_paste = self.clipboard_paths
+        operation = self.clipboard_operation or "copy"
+
+        if not paths_to_paste:
+            # Check Windows clipboard for files (e.g. copied from Explorer)
+            win_files = self._get_windows_clipboard_files()
+            if win_files:
+                paths_to_paste = win_files
+                operation = "copy"
+                self._log(f"Pasting {len(win_files)} file(s) from Windows clipboard", "info")
+            else:
+                messagebox.showinfo("Paste", "Clipboard is empty. Copy or cut files first.")
+                return
 
         dest_pane = self.left_pane if pane == "left" else self.right_pane
         dest = dest_pane.current_path
 
         # Determine source pane for refresh after move
         source_pane = None
-        if self.clipboard_operation == "move":
+        if operation == "move":
             # Find which pane contains the source files
-            if self.clipboard_paths[0].startswith(self.left_pane.current_path):
+            if paths_to_paste[0].startswith(self.left_pane.current_path):
                 source_pane = self.left_pane
-            elif self.clipboard_paths[0].startswith(self.right_pane.current_path):
+            elif paths_to_paste[0].startswith(self.right_pane.current_path):
                 source_pane = self.right_pane
 
-        count = len(self.clipboard_paths)
-        op_name = "Copy" if self.clipboard_operation == "copy" else "Move"
+        count = len(paths_to_paste)
+        op_name = "Copy" if operation == "copy" else "Move"
 
         if messagebox.askyesno(f"Confirm {op_name}",
             f"{op_name} {count} item(s) to:\n{dest}?"):
 
             self._log(f"{op_name}ing {count} items to {dest}", "info")
 
-            if self.clipboard_operation == "copy":
+            if operation == "copy":
                 self.op_manager.copy_with_progress(
-                    self.clipboard_paths,
+                    paths_to_paste,
                     dest,
                     progress_callback=lambda p: self._update_progress(p),
                     complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane)
                 )
             else:  # move
                 self.op_manager.move_with_progress(
-                    self.clipboard_paths,
+                    paths_to_paste,
                     dest,
                     progress_callback=lambda p: self._update_progress(p),
                     complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane, source_pane)
