@@ -1,6 +1,7 @@
 """
 QuickPlayer - Multi-format Viewer Widget for Command Center LaunchPad
 Supports video, audio, images, markdown, HTML, and text files
+Uses VLC for media playback with built-in 10-band graphic EQ
 """
 
 import customtkinter as ctk
@@ -25,17 +26,21 @@ except Exception:
 # Port for external "Open with" to send file paths to the running CCL QuickPlayer
 QUICKPLAYER_PORT = 51478
 
-# Add mpv.net path to find libmpv-2.dll
-MPV_PATH = r"C:\Users\edb616321\AppData\Local\Programs\mpv.net"
-if MPV_PATH not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = MPV_PATH + os.pathsep + os.environ["PATH"]
+# Add VLC to DLL search path
+VLC_PATH = r"C:\Program Files\VideoLAN\VLC"
+try:
+    os.add_dll_directory(VLC_PATH)
+except Exception:
+    pass
+if VLC_PATH not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = VLC_PATH + os.pathsep + os.environ["PATH"]
 
 try:
-    import mpv
-    HAS_MPV = True
+    import vlc
+    HAS_VLC = True
 except Exception as e:
-    HAS_MPV = False
-    print(f"[QUICKPLAYER] MPV not available: {e}")
+    HAS_VLC = False
+    print(f"[QUICKPLAYER] VLC not available: {e}")
 
 try:
     from PIL import Image, ImageTk
@@ -70,6 +75,17 @@ CODE_EXTENSIONS = {'.py', '.js', '.ts', '.html', '.css', '.java', '.c', '.cpp', 
 MARKDOWN_EXTENSIONS = {'.md', '.markdown'}
 HTML_EXTENSIONS = {'.html', '.htm'}
 
+# VLC EQ preset names (18 built-in)
+VLC_EQ_PRESETS = [
+    "Flat", "Classical", "Club", "Dance", "Full Bass",
+    "Full Bass+Treble", "Full Treble", "Headphones", "Large Hall",
+    "Live", "Party", "Pop", "Reggae", "Rock",
+    "Ska", "Soft", "Soft Rock", "Techno"
+]
+
+# EQ band center frequencies
+EQ_BAND_LABELS = ["31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"]
+
 
 class QuickPlayerWidget(ctk.CTkFrame):
     """Multi-format viewer widget with drag-and-drop support"""
@@ -78,13 +94,20 @@ class QuickPlayerWidget(ctk.CTkFrame):
         super().__init__(parent, fg_color=COLORS["bg_dark"], **kwargs)
 
         self.log_callback = log_callback
-        self.player: Optional[mpv.MPV] = None
+        self._vlc_instance: Optional[vlc.Instance] = None
+        self.player: Optional[vlc.MediaPlayer] = None
+        self._eq: Optional[vlc.AudioEqualizer] = None
+        self._eq_enabled = True
+        self._eq_default_preset = "Headphones"
         self.current_file: Optional[str] = None
         self.is_playing = False
         self.duration = 0.0
         self.current_mode = "none"  # none, video, image, text
         self.current_image = None  # Keep reference to prevent garbage collection
         self._header_frame = None  # Store reference to header for packing order
+        self._eq_panel = None  # EQ panel frame reference
+        self._eq_sliders = []  # EQ band slider references
+        self._eq_preset_var = None  # StringVar for preset dropdown
 
         self._setup_ui()
         self._setup_player()
@@ -133,7 +156,7 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self._header_frame = ctk.CTkFrame(self, fg_color=COLORS["bg_dark"], height=70)
         self._header_frame.pack(fill="x", padx=5, pady=5)
         self._header_frame.pack_propagate(False)
-        header = self._header_frame  # Local alias for existing code
+        header = self._header_frame
 
         title = ctk.CTkLabel(
             header,
@@ -266,7 +289,7 @@ class QuickPlayerWidget(ctk.CTkFrame):
         # NOTE: Don't pack yet - will pack after controls are set up
         self.content_container = tk.Frame(self, bg='black')
 
-        # VIDEO VIEW - Video frame for MPV
+        # VIDEO VIEW - Video frame for VLC
         self.video_frame = tk.Frame(self.content_container, bg='black')
 
         # IMAGE VIEW - Scrollable canvas for displaying images
@@ -403,12 +426,25 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.progress_slider.pack(side="left", fill="x", expand=True, padx=15, pady=15)
         self.progress_slider.set(0)
 
+        # EQ button
+        self.eq_btn = ctk.CTkButton(
+            self.video_controls_frame,
+            text="EQ",
+            width=60,
+            height=60,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            fg_color=COLORS["card_bg"],
+            hover_color=COLORS["card_hover"],
+            command=self._toggle_eq_panel
+        )
+        self.eq_btn.pack(side="left", padx=(10, 5), pady=10)
+
         self.vol_label = ctk.CTkLabel(
             self.video_controls_frame,
             text="🔊",
             font=ctk.CTkFont(size=28)
         )
-        self.vol_label.pack(side="left", padx=(15, 5))
+        self.vol_label.pack(side="left", padx=(10, 5))
 
         self.volume_slider = ctk.CTkSlider(
             self.video_controls_frame,
@@ -433,93 +469,6 @@ class QuickPlayerWidget(ctk.CTkFrame):
         )
         self.vol_pct_label.pack(side="left", padx=(0, 10))
 
-        # EQ toggle button
-        self.eq_btn = ctk.CTkButton(
-            self.video_controls_frame,
-            text="EQ",
-            width=70,
-            height=60,
-            font=ctk.CTkFont(size=22, weight="bold"),
-            fg_color=COLORS["card_bg"],
-            hover_color=COLORS["card_hover"],
-            command=self._toggle_eq
-        )
-        self.eq_btn.pack(side="left", padx=(0, 10), pady=10)
-
-        # === 10-BAND EQUALIZER PANEL (hidden by default) ===
-        self._eq_visible = False
-        self._eq_values = [0.0] * 10  # -20 to +20 dB per band
-        self._eq_sliders = []
-
-        self.eq_frame = ctk.CTkFrame(self, fg_color=COLORS["card_bg"], height=180)
-        # Don't pack yet - toggled by EQ button
-
-        eq_bands = ["31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"]
-
-        # Top row: label + preset buttons
-        eq_top = ctk.CTkFrame(self.eq_frame, fg_color="transparent")
-        eq_top.pack(fill="x", padx=10, pady=(5, 0))
-
-        ctk.CTkLabel(
-            eq_top, text="EQUALIZER",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=COLORS["accent"]
-        ).pack(side="left", padx=5)
-
-        # Preset buttons
-        for preset_name, preset_vals in [
-            ("Flat", [0]*10),
-            ("Warm", [6, 4, 2, 0, -2, 0, -2, -4, -2, 0]),
-            ("Bass+", [12, 10, 7, 3, 0, 0, 0, 0, 0, 0]),
-            ("Treble+", [0, 0, 0, 0, 0, 3, 7, 10, 12, 12]),
-            ("Vocal", [-4, -2, 0, 4, 8, 8, 4, 0, -2, -4]),
-        ]:
-            ctk.CTkButton(
-                eq_top, text=preset_name,
-                width=80, height=30,
-                font=ctk.CTkFont(size=14),
-                fg_color=COLORS["bg_dark"],
-                hover_color=COLORS["card_hover"],
-                command=lambda v=preset_vals: self._apply_eq_preset(v)
-            ).pack(side="left", padx=3)
-
-        # Sliders row
-        eq_sliders_frame = ctk.CTkFrame(self.eq_frame, fg_color="transparent")
-        eq_sliders_frame.pack(fill="both", expand=True, padx=5, pady=5)
-
-        for i, band_label in enumerate(eq_bands):
-            col_frame = ctk.CTkFrame(eq_sliders_frame, fg_color="transparent")
-            col_frame.pack(side="left", fill="both", expand=True, padx=2)
-
-            # dB value label at top
-            db_label = ctk.CTkLabel(
-                col_frame, text="0",
-                font=ctk.CTkFont(size=12),
-                text_color=COLORS["text"], width=35
-            )
-            db_label.pack(pady=(0, 2))
-
-            slider = ctk.CTkSlider(
-                col_frame,
-                from_=20, to=-20,
-                orientation="vertical",
-                height=90, width=20,
-                button_color=COLORS["accent"],
-                button_hover_color=COLORS["accent_hover"],
-                progress_color=COLORS["accent"],
-                command=lambda val, idx=i, lbl=db_label: self._on_eq_change(idx, val, lbl)
-            )
-            slider.pack(fill="y", expand=True)
-            slider.set(0)
-            self._eq_sliders.append(slider)
-
-            # Band label at bottom
-            ctk.CTkLabel(
-                col_frame, text=band_label,
-                font=ctk.CTkFont(size=11),
-                text_color="#88BBDD"
-            ).pack(pady=(2, 0))
-
         # Store original image for rescaling
         self._original_image = None
         self._original_image_path = None
@@ -528,94 +477,63 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.content_container.pack(fill="both", expand=True, padx=10, pady=5)
 
     def _setup_player(self):
-        """Initialize TWO MPV players: one for audio (clean, no GPU) and one for video"""
-        if not HAS_MPV:
-            print("[QUICKPLAYER] MPV not available, video playback disabled")
+        """Initialize single VLC Instance + MediaPlayer"""
+        if not HAS_VLC:
+            print("[QUICKPLAYER] VLC not available, video playback disabled")
             return
 
         self._poll_timer_id = None
-        self.player = None           # Active player reference (points to audio or video player)
-        self._audio_player = None    # Audio-only: vo=null, zero Tk interaction
-        self._video_player = None    # Video: embedded in Tk frame with GPU rendering
 
-        # Shared audio settings - high-quality WASAPI pipeline
-        shared_opts = dict(
-            ao='wasapi',
-            audio_buffer=1.0,
-            audio_stream_silence='yes',
-            volume_max=150,
-            gapless_audio='weak',
-            demuxer_max_bytes=50*1024*1024,
-            demuxer_readahead_secs=30,
-            keep_open=True,
-            idle=True,
-            osd_level=0,
-            input_default_bindings=False,
-            input_vo_keyboard=False,
-        )
-
-        # AUDIO PLAYER - completely isolated from Tk/GPU.
-        # High-quality settings safe here because vo=null means zero GIL contention.
         try:
-            self._audio_player = mpv.MPV(
-                vo='null',               # No video output at all
-                audio_samplerate=48000,   # Native WASAPI rate - avoids resampler artifacts
-                audio_format='float',     # 32-bit float - maximum internal precision
-                audio_channels='stereo',  # Force stereo for headphone playback
-                replaygain='album',       # Album-level normalization for consistent volume
-                **shared_opts,
+            # Create VLC instance with minimal options
+            self._vlc_instance = vlc.Instance(
+                '--no-xlib',
+                '--quiet',
+                '--no-video-title-show',
             )
-            print("[QUICKPLAYER] Audio player initialized (vo=null, 48kHz/float, headphone-tuned)")
-        except Exception as e:
-            print(f"[QUICKPLAYER] Failed to init audio player: {e}")
+            self.player = self._vlc_instance.media_player_new()
 
-        # VIDEO PLAYER - embedded in Tk frame for video files
-        try:
-            self.video_frame.update_idletasks()
-            wid = self.video_frame.winfo_id()
-            self._video_player = mpv.MPV(
-                wid=str(int(wid)),
-                hwdec='auto-safe',
-                vo='gpu',
-                video_sync='audio',       # Audio is master clock
-                audio_samplerate=48000,
-                audio_format='float',
-                audio_channels='stereo',
-                **shared_opts,
-            )
-            print("[QUICKPLAYER] Video player initialized (vo=gpu, embedded, 48kHz/float)")
-        except Exception as e:
-            print(f"[QUICKPLAYER] Failed to init video player: {e}")
+            # Initialize EQ with Headphones preset, enabled by default
+            headphones_idx = VLC_EQ_PRESETS.index("Headphones")  # index 7
+            self._eq = vlc.libvlc_audio_equalizer_new_from_preset(headphones_idx)
+            self._eq_enabled = True
 
-        # Default to audio player
-        self.player = self._audio_player or self._video_player
+            print("[QUICKPLAYER] VLC player initialized")
+        except Exception as e:
+            print(f"[QUICKPLAYER] Failed to init VLC: {e}")
+            self._vlc_instance = None
+            self.player = None
 
     def _start_poll(self):
-        """Start polling MPV state every 500ms (2 updates/sec - minimal GIL impact)"""
-        self._stop_poll()  # Cancel any existing timer
+        """Start polling VLC state every 1000ms"""
+        self._stop_poll()
 
         def poll():
             if not self.player:
                 return
             try:
-                # Single batch read - minimize GIL hold time
-                pos = self.player.time_pos
-                dur = self.player.duration
-                paused = self.player.pause
+                # Get duration (in ms, convert to seconds)
+                dur_ms = self.player.get_length()
+                if dur_ms and dur_ms > 0:
+                    self.duration = dur_ms / 1000.0
 
-                if dur is not None:
-                    self.duration = dur
-                if pos is not None:
-                    self._update_time(pos)
-                if paused is not None:
-                    new_playing = not paused
-                    if new_playing != self.is_playing:
-                        self.is_playing = new_playing
-                        self._update_play_button()
+                pos_ms = self.player.get_time()
+                if pos_ms is not None and pos_ms >= 0:
+                    self._update_time(pos_ms / 1000.0)
+
+                # Update play state
+                new_playing = self.player.is_playing() == 1
+                if new_playing != self.is_playing:
+                    self.is_playing = new_playing
+                    self._update_play_button()
+            except Exception as e:
+                print(f"[QUICKPLAYER] Poll error: {e}")
+
+            # Always reschedule - never let the poll die
+            try:
+                self._poll_timer_id = self.after(1000, poll)
             except Exception:
-                pass  # Player might be stopped/terminated
-
-            self._poll_timer_id = self.after(1000, poll)
+                pass
 
         self._poll_timer_id = self.after(1000, poll)
 
@@ -630,42 +548,29 @@ class QuickPlayerWidget(ctk.CTkFrame):
 
     def _setup_drag_drop(self):
         """Setup drag and drop support"""
-        # Register drop target on content container
         try:
             self.content_container.drop_target_register('DND_Files')
             self.content_container.dnd_bind('<<Drop>>', self._on_drop)
         except:
-            pass  # TkDND not available
+            pass
 
-        # Also bind to the whole widget for fallback click-to-open
         self.content_container.bind('<Button-1>', lambda e: self._open_file())
         self.placeholder.bind('<Button-1>', lambda e: self._open_file())
 
     def _setup_keybindings(self):
         """Setup keyboard shortcuts for media playback (bound to top-level window)"""
-        # Bind to the top-level window so keys work regardless of focus
-        # We use a short delay so the top-level window exists when we bind
         def bind_to_toplevel():
             try:
                 top = self.winfo_toplevel()
-
-                # Play/Pause (only when player has a file loaded)
                 top.bind('<space>', lambda e: self._kb_play_pause(e))
-
-                # Seek: Left/Right = 5s, Shift = 30s
                 top.bind('<Left>', lambda e: self._kb_seek(e, -15))
                 top.bind('<Right>', lambda e: self._kb_seek(e, 30))
                 top.bind('<Shift-Left>', lambda e: self._kb_seek(e, -30))
                 top.bind('<Shift-Right>', lambda e: self._kb_seek(e, 30))
-
-                # Volume: Up/Down = +/- 5
                 top.bind('<Up>', lambda e: self._kb_volume(e, 5))
                 top.bind('<Down>', lambda e: self._kb_volume(e, -5))
-
-                # Mute toggle
                 top.bind('<m>', lambda e: self._kb_mute(e))
                 top.bind('<M>', lambda e: self._kb_mute(e))
-
                 print("[QUICKPLAYER] Keyboard shortcuts bound to main window")
             except Exception as ex:
                 print(f"[QUICKPLAYER] Keybinding error: {ex}")
@@ -678,9 +583,8 @@ class QuickPlayerWidget(ctk.CTkFrame):
             if self.current_mode == "video" and self.current_file:
                 delta = 5 if event.delta > 0 else -5
                 self._adjust_volume(delta)
-                return "break"  # Consume the event
+                return "break"
 
-        # Bind to all child widgets in the player
         self.video_frame.bind('<MouseWheel>', on_scroll)
         self.controls_frame.bind('<MouseWheel>', on_scroll)
         self.content_container.bind('<MouseWheel>', on_scroll)
@@ -695,28 +599,24 @@ class QuickPlayerWidget(ctk.CTkFrame):
             return False
 
     def _kb_play_pause(self, event):
-        """Keyboard play/pause - only acts when player is active"""
         if self._is_typing(event):
             return
         if self.current_mode == "video" and self.current_file:
             self._toggle_play()
 
     def _kb_seek(self, event, seconds):
-        """Keyboard seek - only acts when player is active"""
         if self._is_typing(event):
             return
         if self.current_mode == "video" and self.current_file:
             self._seek_by(seconds)
 
     def _kb_volume(self, event, delta):
-        """Keyboard volume - only acts when player is active"""
         if self._is_typing(event):
             return
         if self.current_mode == "video" and self.current_file:
             self._adjust_volume(delta)
 
     def _kb_mute(self, event):
-        """Keyboard mute - only acts when player is active"""
         if self._is_typing(event):
             return
         if self.current_mode == "video" and self.current_file:
@@ -726,7 +626,9 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Seek forward or backward by seconds"""
         if self.player and self.current_mode == "video":
             try:
-                self.player.seek(seconds, 'relative')
+                cur = self.player.get_time()
+                if cur is not None and cur >= 0:
+                    self.player.set_time(cur + int(seconds * 1000))
             except:
                 pass
 
@@ -741,29 +643,21 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Toggle mute"""
         if self.player:
             try:
-                self.player.mute = not self.player.mute
+                self.player.audio_toggle_mute()
             except:
                 pass
 
     def _on_drop(self, event):
         """Handle file drop"""
         try:
-            # Get dropped data
             data = event.data
-
-            # Handle Windows file paths with curly braces
             if data.startswith('{') and data.endswith('}'):
                 data = data[1:-1]
-
-            # Split list of files
             files = self.tk.splitlist(data)
-
             if files:
                 file_path = files[0]
-                # Clean up path - remove curly braces if present
                 if file_path.startswith('{') and file_path.endswith('}'):
                     file_path = file_path[1:-1]
-                # Normalize path
                 file_path = os.path.normpath(file_path)
                 self._log(f"Drop received: {file_path}")
                 self.load_file(file_path)
@@ -803,7 +697,6 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.placeholder.place_forget()
         self._hide_all_views()
 
-        # Determine file type and load appropriately
         if ext in VIDEO_EXTENSIONS or ext in AUDIO_EXTENSIONS:
             self._load_video(file_path, filename)
         elif ext in IMAGE_EXTENSIONS:
@@ -815,7 +708,6 @@ class QuickPlayerWidget(ctk.CTkFrame):
         elif ext in TEXT_EXTENSIONS or ext in CODE_EXTENSIONS:
             self._load_text(file_path, filename)
         else:
-            # Try to load as text
             self._load_text(file_path, filename)
 
     def _hide_all_views(self):
@@ -824,11 +716,17 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.video_frame.pack_forget()
         self.image_frame.pack_forget()
         self.text_frame.pack_forget()
-        # Hide image controls bar (top)
         self.image_controls_bar.pack_forget()
-        # Hide video controls (bottom)
         self.video_controls_frame.pack_forget()
-        # Stop video if playing
+        # Close EQ popup if open
+        if self._eq_panel:
+            try:
+                if self._eq_panel.winfo_exists():
+                    self._eq_panel.destroy()
+            except Exception:
+                pass
+            self._eq_panel = None
+        # Stop VLC if playing
         if self.player and self.current_mode == "video":
             try:
                 self.player.stop()
@@ -860,52 +758,69 @@ class QuickPlayerWidget(ctk.CTkFrame):
             self.video_controls_frame.pack_forget()
 
     def _load_video(self, file_path: str, filename: str):
-        """Load video/audio file - picks clean audio player or GPU video player"""
+        """Load video/audio file using VLC"""
         self.current_mode = "video"
-        # Show bottom controls bar for video, hide top image bar
         self._show_image_controls(False)
         self.controls_frame.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
         self.video_controls_frame.pack(side="left", fill="both", expand=True)
         self.video_frame.pack(fill="both", expand=True)
         self.video_frame.focus_set()
 
-        # Pick the right player: audio files get the clean vo=null player
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext in AUDIO_EXTENSIONS and self._audio_player:
-            # Stop video player if it was active
-            if self.player is self._video_player:
-                try:
-                    self._video_player.stop()
-                except Exception:
-                    pass
-            self.player = self._audio_player
-        elif self._video_player:
-            # Stop audio player if it was active
-            if self.player is self._audio_player:
-                try:
-                    self._audio_player.stop()
-                except Exception:
-                    pass
-            self.player = self._video_player
+        if not self.player or not self._vlc_instance:
+            self._log("VLC player not available", "error")
+            return
 
+        ext = os.path.splitext(file_path)[1].lower()
+        is_video = ext in VIDEO_EXTENSIONS
+
+        try:
+            # Stop any current playback
+            self.player.stop()
+
+            # Only embed video output for actual video files
+            # For audio, disable video output to prevent DirectX from
+            # taking over the Tk window and freezing the UI
+            if is_video:
+                self.video_frame.update_idletasks()
+                hwnd = self.video_frame.winfo_id()
+                self.player.set_hwnd(hwnd)
+            else:
+                self.player.set_hwnd(0)
+
+            # Create media and play
+            media = self._vlc_instance.media_new(file_path)
+            self.player.set_media(media)
+
+            # Apply EQ if enabled
+            if self._eq_enabled and self._eq:
+                self.player.set_equalizer(self._eq)
+
+            # Set volume from slider
+            vol = int(self.volume_slider.get())
+
+            self.player.play()
+
+            # VLC needs a moment to start before volume can be set
+            self.after(300, lambda: self._apply_initial_volume(vol))
+
+            self._start_poll()
+            self._log(f"Playing: {filename}", "success")
+        except Exception as e:
+            self._log(f"Load error: {e}", "error")
+            print(f"[QUICKPLAYER] Load error: {e}")
+
+    def _apply_initial_volume(self, vol):
+        """Apply volume after VLC has started playing (needs short delay)"""
         if self.player:
             try:
-                self.player.loadfile(file_path)
-                self._start_poll()
-                # Re-apply EQ after file starts decoding
-                if hasattr(self, '_eq_values') and any(v != 0 for v in self._eq_values):
-                    self.after(300, self._apply_eq)
-                self._log(f"Playing: {filename}", "success")
-            except Exception as e:
-                self._log(f"Load error: {e}", "error")
-        else:
-            self._log("Video player not available", "error")
+                self.player.audio_set_volume(vol)
+            except Exception:
+                pass
 
     def _load_image(self, file_path: str, filename: str):
         """Load and display image"""
         self.current_mode = "image"
-        # Hide video controls bar (bottom), show image controls bar (top)
-        self.controls_frame.pack_forget()  # Hide entire bottom bar for images
+        self.controls_frame.pack_forget()
         self._show_image_controls(True)
         self.image_frame.pack(fill="both", expand=True)
 
@@ -914,26 +829,18 @@ class QuickPlayerWidget(ctk.CTkFrame):
             return
 
         try:
-            # Load and store original image for rescaling
             self._original_image = Image.open(file_path)
             self._original_image_path = file_path
             img_width, img_height = self._original_image.size
-
-            # Update info label
             self.image_info_label.configure(text=f"{img_width} x {img_height}")
-
-            # Default to fit-to-window
             self._fit_image()
-
             self._log(f"Viewing: {filename} ({img_width}x{img_height})", "success")
-
         except Exception as e:
             self._log(f"Image load error: {e}", "error")
 
     def _show_image_controls(self, show: bool):
         """Show or hide image controls bar at TOP"""
         if show:
-            # Pack image controls bar right after header (at top, before content)
             self.image_controls_bar.pack(fill="x", padx=5, pady=(0, 5), after=self._header_frame)
         else:
             self.image_controls_bar.pack_forget()
@@ -942,34 +849,22 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Scale image to fit the canvas"""
         if not self._original_image:
             return
-
         try:
-            # Get canvas size
             self.image_canvas.update_idletasks()
             canvas_width = self.image_canvas.winfo_width()
             canvas_height = self.image_canvas.winfo_height()
-
             if canvas_width < 100:
                 canvas_width = 800
             if canvas_height < 100:
                 canvas_height = 600
-
-            # Calculate zoom to fit
             img_width, img_height = self._original_image.size
             scale = min(canvas_width / img_width, canvas_height / img_height)
             self._zoom_level = int(scale * 100)
-
-            # Update slider without triggering callback
             self.zoom_slider.set(self._zoom_level)
             self.zoom_value_label.configure(text=f"{self._zoom_level}%")
-
-            # Apply zoom
             self._apply_zoom()
-
-            # Update button states
             self.fit_btn.configure(fg_color=COLORS["accent"])
             self.actual_btn.configure(fg_color=COLORS["card_bg"])
-
         except Exception as e:
             self._log(f"Fit image error: {e}", "error")
 
@@ -977,13 +872,10 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Display image at 100% (actual size)"""
         if not self._original_image:
             return
-
         self._zoom_level = 100
         self.zoom_slider.set(100)
         self.zoom_value_label.configure(text="100%")
         self._apply_zoom()
-
-        # Update button states
         self.fit_btn.configure(fg_color=COLORS["card_bg"])
         self.actual_btn.configure(fg_color=COLORS["accent"])
 
@@ -992,8 +884,6 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self._zoom_level = int(value)
         self.zoom_value_label.configure(text=f"{self._zoom_level}%")
         self._apply_zoom()
-
-        # Clear button highlights when using slider
         self.fit_btn.configure(fg_color=COLORS["card_bg"])
         self.actual_btn.configure(fg_color=COLORS["card_bg"])
 
@@ -1001,41 +891,23 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Apply current zoom level to image"""
         if not self._original_image:
             return
-
         try:
             img = self._original_image.copy()
             img_width, img_height = img.size
-
-            # Calculate new size based on zoom
-            new_width = int(img_width * self._zoom_level / 100)
-            new_height = int(img_height * self._zoom_level / 100)
-
-            # Minimum size
-            new_width = max(10, new_width)
-            new_height = max(10, new_height)
-
-            # Resize image
+            new_width = max(10, int(img_width * self._zoom_level / 100))
+            new_height = max(10, int(img_height * self._zoom_level / 100))
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-            # Convert to PhotoImage
             self.current_image = ImageTk.PhotoImage(img)
-
-            # Clear canvas and display image
             self.image_canvas.delete("all")
             self.image_canvas.create_image(0, 0, image=self.current_image, anchor="nw", tags="image")
-
-            # Update scroll region to match image size
             self.image_canvas.configure(scrollregion=(0, 0, new_width, new_height))
-
         except Exception as e:
             self._log(f"Zoom error: {e}", "error")
 
     def _on_image_mousewheel(self, event):
-        """Vertical scroll with mousewheel"""
         self.image_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_image_shift_mousewheel(self, event):
-        """Horizontal scroll with shift+mousewheel"""
         self.image_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _load_markdown(self, file_path: str, filename: str):
@@ -1044,24 +916,15 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.text_frame.pack(fill="both", expand=True)
         self._show_video_controls(False)
         self._show_image_controls(False)
-
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
-
-            # Clear text widget
             self.text_widget.delete("1.0", "end")
-
             if HAS_MARKDOWN:
-                # Convert markdown to HTML-like formatted text (basic rendering)
-                # For now, just display with some basic formatting
                 self._render_markdown(content)
             else:
-                # Display raw markdown
                 self.text_widget.insert("1.0", content)
-
             self._log(f"Viewing: {filename}", "success")
-
         except Exception as e:
             self._log(f"Markdown load error: {e}", "error")
 
@@ -1069,20 +932,16 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Render markdown with basic formatting"""
         lines = content.split('\n')
         for line in lines:
-            # Headers
             if line.startswith('### '):
                 self.text_widget.insert("end", line[4:] + '\n', "h3")
             elif line.startswith('## '):
                 self.text_widget.insert("end", line[3:] + '\n', "h2")
             elif line.startswith('# '):
                 self.text_widget.insert("end", line[2:] + '\n', "h1")
-            # Code blocks
             elif line.startswith('```'):
                 self.text_widget.insert("end", line + '\n', "code")
-            # List items
             elif line.startswith('- ') or line.startswith('* '):
                 self.text_widget.insert("end", '  • ' + line[2:] + '\n')
-            # Numbered lists
             elif len(line) > 2 and line[0].isdigit() and line[1] == '.':
                 self.text_widget.insert("end", '  ' + line + '\n')
             else:
@@ -1094,15 +953,12 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.text_frame.pack(fill="both", expand=True)
         self._show_video_controls(False)
         self._show_image_controls(False)
-
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
-
             self.text_widget.delete("1.0", "end")
             self.text_widget.insert("1.0", content)
             self._log(f"Viewing: {filename}", "success")
-
         except Exception as e:
             self._log(f"HTML load error: {e}", "error")
 
@@ -1112,15 +968,12 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.text_frame.pack(fill="both", expand=True)
         self._show_video_controls(False)
         self._show_image_controls(False)
-
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
-
             self.text_widget.delete("1.0", "end")
             self.text_widget.insert("1.0", content)
             self._log(f"Viewing: {filename}", "success")
-
         except Exception as e:
             self._log(f"Text load error: {e}", "error")
 
@@ -1128,9 +981,11 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Toggle play/pause"""
         if not self.player or not self.current_file:
             return
-
         try:
-            self.player.pause = not self.player.pause
+            if self.player.is_playing():
+                self.player.set_pause(1)
+            else:
+                self.player.set_pause(0)
         except:
             pass
 
@@ -1151,17 +1006,17 @@ class QuickPlayerWidget(ctk.CTkFrame):
         """Handle seek slider"""
         if self.player and self.duration > 0:
             try:
-                seek_time = (value / 100) * self.duration
-                self.player.seek(seek_time, 'absolute')
+                seek_ms = int((value / 100) * self.duration * 1000)
+                self.player.set_time(seek_ms)
             except:
                 pass
 
     def _on_volume(self, value):
-        """Handle volume slider (0-150 range)"""
+        """Handle volume slider (0-150 range, VLC accepts 0-200)"""
         vol = int(value)
         if self.player:
             try:
-                self.player.volume = vol
+                self.player.audio_set_volume(vol)
             except:
                 pass
         try:
@@ -1169,79 +1024,14 @@ class QuickPlayerWidget(ctk.CTkFrame):
         except:
             pass
 
-    def _toggle_eq(self):
-        """Toggle equalizer panel visibility"""
-        if self._eq_visible:
-            self.eq_frame.pack_forget()
-            self._eq_visible = False
-            self.eq_btn.configure(fg_color=COLORS["card_bg"])
-        else:
-            # Pack EQ between content and controls bar
-            self.eq_frame.pack(side="bottom", fill="x", padx=10, pady=(0, 5), before=self.controls_frame)
-            self._eq_visible = True
-            self.eq_btn.configure(fg_color=COLORS["accent"])
-
-    def _on_eq_change(self, band_idx: int, value: float, db_label):
-        """Handle individual EQ band change"""
-        value = round(value, 1)
-        self._eq_values[band_idx] = value
-        db_label.configure(text=f"{value:+.0f}")
-        self._apply_eq()
-
-    def _apply_eq_preset(self, values: list):
-        """Apply an EQ preset"""
-        self._eq_values = list(values)
-        for i, slider in enumerate(self._eq_sliders):
-            slider.set(values[i])
-        # Update all dB labels
-        eq_sliders_frame = self.eq_frame.winfo_children()[-1]  # last child is sliders frame
-        for i, col_frame in enumerate(eq_sliders_frame.winfo_children()):
-            children = col_frame.winfo_children()
-            if children:
-                children[0].configure(text=f"{values[i]:+.0f}")  # dB label is first child
-        self._apply_eq()
-
-    # Equalizer APO config path - writes EQ settings to this file,
-    # APO driver picks up changes instantly at the WASAPI level.
-    _APO_EQ_FILE = r"D:\EqualizerAPO\config\quickplayer_eq.txt"
-
-    def _apply_eq(self):
-        """Apply EQ via Equalizer APO (system-level WASAPI filter).
-
-        Writes a GraphicEQ config to APO's config file. APO monitors
-        the file and applies changes in real-time at the audio driver
-        level - no mpv filter chain needed.
-        """
-        freqs = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-
-        try:
-            # Build GraphicEQ line: "31 0; 62 0; 125 5; ..." etc.
-            pairs = [f"{f} {g:.1f}" for f, g in zip(freqs, self._eq_values)]
-            graphic_eq = "; ".join(pairs)
-
-            # Calculate preamp to prevent clipping (negative of max gain)
-            max_gain = max(self._eq_values)
-            preamp = -max_gain if max_gain > 0 else 0
-
-            config = f"Preamp: {preamp:.1f} dB\nGraphicEQ: {graphic_eq}\n"
-
-            with open(self._APO_EQ_FILE, 'w') as f:
-                f.write(config)
-
-        except Exception as e:
-            print(f"[QUICKPLAYER] EQ write error: {e}")
-
     def _update_time(self, current_time: float):
         """Update time display"""
         if self.duration > 0:
-            # Update time label
             cur_min = int(current_time // 60)
             cur_sec = int(current_time % 60)
             dur_min = int(self.duration // 60)
             dur_sec = int(self.duration % 60)
             self.time_label.configure(text=f"{cur_min:02d}:{cur_sec:02d} / {dur_min:02d}:{dur_sec:02d}")
-
-            # Update progress slider (without triggering seek)
             progress = (current_time / self.duration) * 100
             self.progress_slider.set(progress)
 
@@ -1251,6 +1041,231 @@ class QuickPlayerWidget(ctk.CTkFrame):
             self.play_btn.configure(text="⏸")
         else:
             self.play_btn.configure(text="▶")
+
+    # ======================== EQ PANEL (Popup Window) ========================
+
+    def _toggle_eq_panel(self):
+        """Toggle the EQ popup window"""
+        if self._eq_panel and self._eq_panel.winfo_exists():
+            self._eq_panel.destroy()
+            self._eq_panel = None
+            self.eq_btn.configure(fg_color=COLORS["card_bg"])
+        else:
+            self._show_eq_panel()
+            self.eq_btn.configure(fg_color=COLORS["accent"])
+
+    def _show_eq_panel(self):
+        """Show the 10-band EQ as a popup window"""
+        if self._eq_panel and self._eq_panel.winfo_exists():
+            self._eq_panel.lift()
+            self._eq_panel.focus_set()
+            return
+
+        # Create popup window
+        self._eq_panel = tk.Toplevel(self.winfo_toplevel())
+        self._eq_panel.title("QuickPlayer Equalizer")
+        self._eq_panel.configure(bg="#001030")
+        self._eq_panel.geometry("900x320")
+        self._eq_panel.resizable(True, False)
+        self._eq_panel.attributes('-topmost', True)
+        self._eq_panel.protocol("WM_DELETE_WINDOW", self._close_eq_panel)
+
+        # Position near bottom-center of screen
+        self._eq_panel.update_idletasks()
+        sw = self._eq_panel.winfo_screenwidth()
+        sh = self._eq_panel.winfo_screenheight()
+        x = (sw // 2) - 450
+        y = sh - 400
+        self._eq_panel.geometry(f"900x320+{x}+{y}")
+
+        main = self._eq_panel
+
+        # Top row: Enable toggle + Preset dropdown + Reset + Preamp
+        top_row = tk.Frame(main, bg="#001030")
+        top_row.pack(fill="x", padx=15, pady=(12, 5))
+
+        # Enable/Disable toggle
+        self._eq_enable_var = tk.BooleanVar(value=self._eq_enabled)
+        eq_check = tk.Checkbutton(
+            top_row, text="EQ Enabled",
+            font=("Segoe UI", 14, "bold"),
+            fg="#00BFFF", bg="#001030", selectcolor="#001A4D",
+            activebackground="#001030", activeforeground="#00BFFF",
+            variable=self._eq_enable_var, command=self._on_eq_toggle
+        )
+        eq_check.pack(side="left", padx=(5, 20))
+
+        # Preset dropdown
+        tk.Label(top_row, text="Preset:", font=("Segoe UI", 13, "bold"),
+                 fg="white", bg="#001030").pack(side="left", padx=(0, 5))
+
+        # Show current preset name (default: Headphones)
+        current_preset = getattr(self, '_eq_default_preset', "Flat")
+        self._eq_preset_var = tk.StringVar(value=current_preset)
+        import tkinter.ttk as ttk
+        style = ttk.Style()
+        style.configure("EQ.TCombobox", fieldbackground="#0047AB", background="#0047AB")
+        preset_combo = ttk.Combobox(
+            top_row, textvariable=self._eq_preset_var,
+            values=VLC_EQ_PRESETS, state="readonly", width=18,
+            font=("Segoe UI", 12)
+        )
+        preset_combo.pack(side="left", padx=5)
+        preset_combo.bind("<<ComboboxSelected>>",
+                          lambda e: self._on_eq_preset(self._eq_preset_var.get()))
+
+        # Reset button
+        reset_btn = tk.Button(
+            top_row, text="Reset", font=("Segoe UI", 12, "bold"),
+            bg="#0047AB", fg="white", activebackground="#CC3333",
+            activeforeground="white", bd=0, padx=12, pady=2,
+            command=self._reset_eq
+        )
+        reset_btn.pack(side="left", padx=15)
+
+        # Preamp
+        tk.Label(top_row, text="Preamp:", font=("Segoe UI", 12),
+                 fg="white", bg="#001030").pack(side="left", padx=(20, 5))
+
+        self._preamp_var = tk.DoubleVar(value=0)
+        self._preamp_slider = tk.Scale(
+            top_row, from_=-20, to=20, orient="horizontal",
+            variable=self._preamp_var, length=140, showvalue=True,
+            bg="#001030", fg="white", troughcolor="#333355",
+            highlightthickness=0, font=("Segoe UI", 10),
+            command=self._on_preamp_change
+        )
+        self._preamp_slider.pack(side="left", padx=5)
+
+        # Band sliders area
+        bands_frame = tk.Frame(main, bg="#001030")
+        bands_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+
+        self._eq_sliders = []
+        self._eq_value_labels = []
+
+        for i in range(10):
+            band_frame = tk.Frame(bands_frame, bg="#001030")
+            band_frame.pack(side="left", fill="both", expand=True, padx=3)
+
+            # Frequency label at top
+            freq_label = tk.Label(
+                band_frame, text=EQ_BAND_LABELS[i],
+                font=("Segoe UI", 12, "bold"),
+                fg="#00BFFF", bg="#001030"
+            )
+            freq_label.pack(side="top", pady=(2, 0))
+
+            # dB value label
+            val_label = tk.Label(
+                band_frame, text="0 dB",
+                font=("Segoe UI", 10),
+                fg="#AAAAFF", bg="#001030", width=6
+            )
+            val_label.pack(side="top", pady=(0, 2))
+            self._eq_value_labels.append(val_label)
+
+            # Vertical scale slider
+            slider = tk.Scale(
+                band_frame, from_=20, to=-20, orient="vertical",
+                length=160, width=18, showvalue=False,
+                bg="#001030", fg="white", troughcolor="#333355",
+                highlightthickness=0, sliderrelief="flat",
+                command=lambda val, idx=i: self._on_eq_band_change(idx, float(val))
+            )
+            slider.set(0)
+            slider.pack(side="top", padx=2, pady=(0, 5))
+            self._eq_sliders.append(slider)
+
+        # Sync sliders to current EQ state
+        if self._eq:
+            preamp = self._eq.get_preamp()
+            self._preamp_slider.set(preamp)
+            for i in range(10):
+                gain = self._eq.get_amp_at_index(i)
+                self._eq_sliders[i].set(gain)
+                self._eq_value_labels[i].configure(text=f"{gain:.0f} dB")
+
+        print("[QUICKPLAYER] EQ panel opened")
+
+    def _close_eq_panel(self):
+        """Close the EQ popup window"""
+        if self._eq_panel and self._eq_panel.winfo_exists():
+            self._eq_panel.destroy()
+            self._eq_panel = None
+            self.eq_btn.configure(fg_color=COLORS["card_bg"])
+
+    def _on_eq_toggle(self):
+        """Enable/disable EQ"""
+        self._eq_enabled = self._eq_enable_var.get()
+        if self.player:
+            try:
+                if self._eq_enabled and self._eq:
+                    self.player.set_equalizer(self._eq)
+                else:
+                    self.player.set_equalizer(None)
+            except Exception as e:
+                print(f"[QUICKPLAYER] EQ toggle error: {e}")
+
+    def _on_eq_preset(self, preset_name: str):
+        """Load an EQ preset"""
+        try:
+            self._eq_default_preset = preset_name
+            idx = VLC_EQ_PRESETS.index(preset_name)
+            self._eq = vlc.libvlc_audio_equalizer_new_from_preset(idx)
+
+            # Update sliders to match preset values
+            preamp = self._eq.get_preamp()
+            self._preamp_slider.set(preamp)
+
+            for i in range(10):
+                gain = self._eq.get_amp_at_index(i)
+                self._eq_sliders[i].set(gain)
+                self._eq_value_labels[i].configure(text=f"{gain:.0f} dB")
+
+            # Apply if enabled
+            if self._eq_enabled and self.player:
+                self.player.set_equalizer(self._eq)
+
+            # Auto-enable when selecting a non-Flat preset
+            if preset_name != "Flat" and not self._eq_enabled:
+                self._eq_enabled = True
+                self._eq_enable_var.set(True)
+                if self.player:
+                    self.player.set_equalizer(self._eq)
+
+        except Exception as e:
+            print(f"[QUICKPLAYER] EQ preset error: {e}")
+
+    def _on_eq_band_change(self, band_idx: int, value: float):
+        """Handle individual EQ band slider change"""
+        gain = float(value)
+        if self._eq:
+            self._eq.set_amp_at_index(gain, band_idx)
+            self._eq_value_labels[band_idx].configure(text=f"{gain:.0f} dB")
+            if self._eq_enabled and self.player:
+                self.player.set_equalizer(self._eq)
+
+    def _on_preamp_change(self, value):
+        """Handle preamp slider change"""
+        preamp = float(value)
+        if self._eq:
+            self._eq.set_preamp(preamp)
+            if self._eq_enabled and self.player:
+                self.player.set_equalizer(self._eq)
+
+    def _reset_eq(self):
+        """Reset EQ to flat"""
+        self._eq = vlc.AudioEqualizer()  # Fresh flat EQ
+        self._preamp_slider.set(0)
+        for i in range(10):
+            self._eq_sliders[i].set(0)
+            self._eq_value_labels[i].configure(text="0 dB")
+        self._eq_preset_var.set("Flat")
+        if self._eq_enabled and self.player:
+            self.player.set_equalizer(self._eq)
+
+    # ======================== POP OUT ========================
 
     def _pop_out(self):
         """Pop out current video into fullscreen window"""
@@ -1263,67 +1278,106 @@ class QuickPlayerWidget(ctk.CTkFrame):
             self._log("Pop out only works for video/audio files", "error")
             return
 
-        # Get current playback position
+        # Get current playback position (ms)
         position = 0.0
         if self.player:
             try:
-                pos = self.player.time_pos
-                if pos is not None:
-                    position = pos
+                pos_ms = self.player.get_time()
+                if pos_ms is not None and pos_ms >= 0:
+                    position = pos_ms / 1000.0
             except:
                 pass
 
         # Pause embedded player
         if self.player and self.is_playing:
             try:
-                self.player.pause = True
+                self.player.set_pause(1)
             except:
                 pass
 
         file_path = self.current_file
 
+        # Pass current EQ state to pop-out
+        eq_preset_idx = None
+        eq_band_gains = None
+        eq_preamp = 0.0
+        if self._eq_enabled and self._eq:
+            eq_preamp = self._eq.get_preamp()
+            eq_band_gains = [self._eq.get_amp_at_index(i) for i in range(10)]
+            try:
+                eq_preset_idx = VLC_EQ_PRESETS.index(self._eq_preset_var.get()) if self._eq_preset_var else None
+            except (ValueError, AttributeError):
+                eq_preset_idx = None
+
         def on_popout_close(resume_pos):
             """Called when pop-out closes - resume in embedded player"""
             if self.player and self.current_file == file_path:
                 try:
-                    self.player.seek(resume_pos, 'absolute')
-                    self.player.pause = False
+                    self.player.set_time(int(resume_pos * 1000))
+                    self.player.set_pause(0)
                 except:
                     pass
 
-        # Create pop-out window
-        QuickPlayerPopOut(self.winfo_toplevel(), file_path, position, on_popout_close)
+        QuickPlayerPopOut(
+            self.winfo_toplevel(), file_path, position, on_popout_close,
+            eq_enabled=self._eq_enabled, eq_preset_idx=eq_preset_idx,
+            eq_band_gains=eq_band_gains, eq_preamp=eq_preamp
+        )
 
     def destroy(self):
-        """Clean up both players"""
+        """Clean up VLC player, EQ popup, and instance"""
         self._stop_poll()
-        for p in (self._audio_player, self._video_player):
-            if p:
-                try:
-                    p.terminate()
-                except:
-                    pass
+        # Close EQ popup if open
+        if self._eq_panel:
+            try:
+                if self._eq_panel.winfo_exists():
+                    self._eq_panel.destroy()
+            except Exception:
+                pass
+            self._eq_panel = None
+        if self.player:
+            try:
+                self.player.stop()
+                self.player.release()
+            except:
+                pass
+        if self._vlc_instance:
+            try:
+                self._vlc_instance.release()
+            except:
+                pass
         super().destroy()
 
 
 class QuickPlayerPopOut(tk.Toplevel):
-    """Fullscreen pop-out video player window"""
+    """Fullscreen pop-out video player window using VLC"""
 
     def __init__(self, parent, file_path: str, start_position: float = 0.0,
-                 on_close_callback=None, standalone: bool = False):
+                 on_close_callback=None, standalone: bool = False,
+                 eq_enabled: bool = False, eq_preset_idx: Optional[int] = None,
+                 eq_band_gains: Optional[list] = None, eq_preamp: float = 0.0):
         super().__init__(parent)
 
         self.file_path = file_path
         self.start_position = start_position
         self.on_close_callback = on_close_callback
         self.standalone = standalone
-        self.player: Optional[mpv.MPV] = None
+        self._vlc_instance: Optional[vlc.Instance] = None
+        self.player: Optional[vlc.MediaPlayer] = None
+        self._eq: Optional[vlc.AudioEqualizer] = None
         self.is_playing = False
         self.duration = 0.0
         self._controls_visible = True
         self._hide_timer = None
         self._is_fullscreen = True
         self._closing = False
+        self._poll_timer_id = None
+
+        # EQ state from parent
+        self._eq_enabled = eq_enabled
+        self._eq_preset_idx = eq_preset_idx
+        self._eq_band_gains = eq_band_gains
+        self._eq_preamp = eq_preamp
 
         # Window setup
         self.title(f"QuickPlayer - {os.path.basename(file_path)}")
@@ -1335,21 +1389,23 @@ class QuickPlayerPopOut(tk.Toplevel):
         self._bind_keys()
         self._init_player()
 
-        # Start auto-hide timer for controls
+        # Don't hide controls immediately - let the cursor poll handle it
         self._reset_hide_timer()
 
     def _build_ui(self):
         """Build the pop-out player UI"""
-        # Video area fills entire window
-        self.video_frame = tk.Frame(self, bg='black')
+        # Use a container so video_frame and controls don't fight for space
+        self.main_container = tk.Frame(self, bg='black')
+        self.main_container.pack(fill="both", expand=True)
+
+        self.video_frame = tk.Frame(self.main_container, bg='black')
         self.video_frame.pack(fill="both", expand=True)
 
-        # Controls overlay at bottom
+        # Controls overlay at bottom of the main window (not inside video_frame)
         self.controls_frame = tk.Frame(self, bg='#1a1a2e', height=70)
         self.controls_frame.pack(side="bottom", fill="x")
         self.controls_frame.pack_propagate(False)
 
-        # Play/Pause button
         self.play_btn = tk.Button(
             self.controls_frame, text="⏸", font=("Segoe UI", 22),
             bg='#0047AB', fg='white', activebackground='#0066FF',
@@ -1358,7 +1414,6 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.play_btn.pack(side="left", padx=10, pady=8)
 
-        # Stop button
         self.stop_btn = tk.Button(
             self.controls_frame, text="⏹", font=("Segoe UI", 22),
             bg='#333355', fg='white', activebackground='#555577',
@@ -1367,7 +1422,6 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.stop_btn.pack(side="left", padx=5, pady=8)
 
-        # Skip back button (-15s)
         self.skip_back_btn = tk.Button(
             self.controls_frame, text="⏪", font=("Segoe UI", 20),
             bg='#333355', fg='white', activebackground='#555577',
@@ -1376,7 +1430,6 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.skip_back_btn.pack(side="left", padx=3, pady=8)
 
-        # Skip forward button (+30s)
         self.skip_fwd_btn = tk.Button(
             self.controls_frame, text="⏩", font=("Segoe UI", 20),
             bg='#333355', fg='white', activebackground='#555577',
@@ -1385,14 +1438,12 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.skip_fwd_btn.pack(side="left", padx=(3, 10), pady=8)
 
-        # Time label
         self.time_label = tk.Label(
             self.controls_frame, text="00:00 / 00:00",
             font=("Segoe UI", 16, "bold"), bg='#1a1a2e', fg='white'
         )
         self.time_label.pack(side="left", padx=15)
 
-        # Seek slider - use tk.Scale for simplicity in Toplevel
         self.seek_var = tk.DoubleVar(value=0)
         self.seek_slider = tk.Scale(
             self.controls_frame, from_=0, to=1000, orient="horizontal",
@@ -1403,14 +1454,12 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.seek_slider.pack(side="left", fill="x", expand=True, padx=10, pady=12)
 
-        # Volume label
         vol_label = tk.Label(
             self.controls_frame, text="🔊", font=("Segoe UI", 18),
             bg='#1a1a2e', fg='white'
         )
         vol_label.pack(side="left", padx=(10, 2))
 
-        # Volume slider (0-150 with boost)
         self.vol_var = tk.IntVar(value=100)
         self.vol_slider = tk.Scale(
             self.controls_frame, from_=0, to=150, orient="horizontal",
@@ -1421,7 +1470,6 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.vol_slider.pack(side="left", padx=(0, 10), pady=12)
 
-        # Back to CCL / Close button
         close_text = "✕ Close" if self.standalone else "↩ Back to CCL"
         self.close_btn = tk.Button(
             self.controls_frame, text=close_text, font=("Segoe UI", 14, "bold"),
@@ -1431,16 +1479,18 @@ class QuickPlayerPopOut(tk.Toplevel):
         )
         self.close_btn.pack(side="right", padx=10, pady=8)
 
-        # Bind mouse movement on video frame to show controls
-        self.video_frame.bind('<Motion>', self._on_mouse_move)
+        # NOTE: We do NOT rely on Tk <Motion> events for showing controls
+        # because VLC's DirectX surface captures all mouse events from the
+        # video_frame HWND, preventing Tk from receiving them.
+        # Instead we poll the Windows cursor position via ctypes (see _start_cursor_poll).
         self.controls_frame.bind('<Motion>', self._on_mouse_move)
-        self.bind('<Motion>', self._on_mouse_move)
-
-        # Mouse wheel = volume (linked to slider)
-        self.bind_all('<MouseWheel>', self._on_mousewheel_volume)
-
-        # Double-click to toggle fullscreen
+        self.bind('<MouseWheel>', self._on_mousewheel_volume)
         self.video_frame.bind('<Double-Button-1>', lambda e: self._toggle_fullscreen())
+
+        # Track last known cursor position for polling
+        self._last_cursor_x = 0
+        self._last_cursor_y = 0
+        self._cursor_poll_id = None
 
     def _bind_keys(self):
         """Bind keyboard shortcuts"""
@@ -1457,65 +1507,74 @@ class QuickPlayerPopOut(tk.Toplevel):
         self.bind('<Down>', lambda e: self._adjust_volume(-5))
         self.bind('<m>', lambda e: self._toggle_mute())
         self.bind('<M>', lambda e: self._toggle_mute())
+        # Any key press shows controls (so user can always get them back)
+        self.bind('<Key>', self._on_any_key)
+
+    def _on_any_key(self, event):
+        """Show controls on any key press"""
+        # Don't interfere with specific bindings - just make controls visible
+        self._show_controls()
 
     def _toggle_mute(self):
-        """Toggle mute"""
         if self.player:
             try:
-                self.player.mute = not self.player.mute
+                self.player.audio_toggle_mute()
             except:
                 pass
 
     def _init_player(self):
-        """Initialize MPV player in the pop-out window"""
-        if not HAS_MPV:
+        """Initialize VLC player in the pop-out window"""
+        if not HAS_VLC:
             return
 
-        self._poll_timer_id = None
+        ext = os.path.splitext(self.file_path)[1].lower()
+        is_video = ext in VIDEO_EXTENSIONS
 
         try:
-            self.video_frame.update_idletasks()
-            wid = self.video_frame.winfo_id()
-
-            self.player = mpv.MPV(
-                wid=str(int(wid)),
-                # Video
-                hwdec='auto-safe',
-                vo='gpu',
-                video_sync='audio',
-                # Audio - high-quality headphone-tuned
-                ao='wasapi',
-                audio_buffer=1.0,
-                audio_stream_silence='yes',
-                audio_samplerate=48000,
-                audio_format='float',
-                audio_channels='stereo',
-                volume_max=150,
-                gapless_audio='weak',
-                demuxer_max_bytes=50*1024*1024,
-                demuxer_readahead_secs=30,
-                # General
-                keep_open=True,
-                idle=True,
-                osd_level=0,
-                input_default_bindings=False,
-                input_vo_keyboard=False,
+            self._vlc_instance = vlc.Instance(
+                '--no-xlib',
+                '--quiet',
+                '--no-video-title-show',
             )
+            self.player = self._vlc_instance.media_player_new()
 
-            # NO property observers - use polling instead (same fix as embedded player)
+            # Only embed video output for actual video files
+            if is_video:
+                self.video_frame.update_idletasks()
+                hwnd = self.video_frame.winfo_id()
+                self.player.set_hwnd(hwnd)
+            else:
+                self.player.set_hwnd(0)
 
-            # Load the file
-            self.player.loadfile(self.file_path)
+            # Apply EQ from parent if enabled
+            if self._eq_enabled:
+                if self._eq_band_gains:
+                    self._eq = vlc.AudioEqualizer()
+                    self._eq.set_preamp(self._eq_preamp)
+                    for i, gain in enumerate(self._eq_band_gains):
+                        self._eq.set_amp_at_index(gain, i)
+                elif self._eq_preset_idx is not None:
+                    self._eq = vlc.libvlc_audio_equalizer_new_from_preset(self._eq_preset_idx)
+                if self._eq:
+                    self.player.set_equalizer(self._eq)
 
-            # Start polling timer for UI updates
+            # Load and play
+            media = self._vlc_instance.media_new(self.file_path)
+            self.player.set_media(media)
+            self.player.play()
+
+            # Set volume after a short delay (VLC needs time to initialize audio)
+            self.after(300, lambda: self.player.audio_set_volume(self.vol_var.get()) if self.player else None)
+
             self._start_poll()
+            self._start_cursor_poll()
 
-            # Seek to position after a short delay
+            # Seek to start position after a short delay
             if self.start_position > 0:
                 def do_seek():
                     try:
                         if self.player and self.start_position > 0:
-                            self.player.seek(self.start_position, 'absolute')
+                            self.player.set_time(int(self.start_position * 1000))
                             self.start_position = 0
                     except:
                         pass
@@ -1525,39 +1584,40 @@ class QuickPlayerPopOut(tk.Toplevel):
             print(f"[POPOUT] Playing: {self.file_path}")
 
         except Exception as e:
-            print(f"[POPOUT] Failed to init MPV: {e}")
+            print(f"[POPOUT] Failed to init VLC: {e}")
             self.player = None
 
     def _start_poll(self):
-        """Start polling MPV state every 250ms"""
+        """Start polling VLC state every 1000ms"""
         self._stop_poll()
 
         def poll():
             if not self.player or self._closing:
                 return
             try:
-                pos = self.player.time_pos
-                dur = self.player.duration
-                if dur is not None:
-                    self.duration = dur
-                if pos is not None:
-                    self._update_time(pos)
+                dur_ms = self.player.get_length()
+                if dur_ms and dur_ms > 0:
+                    self.duration = dur_ms / 1000.0
 
-                paused = self.player.pause
-                if paused is not None:
-                    new_playing = not paused
-                    if new_playing != self.is_playing:
-                        self.is_playing = new_playing
-                        self._update_play_button()
+                pos_ms = self.player.get_time()
+                if pos_ms is not None and pos_ms >= 0:
+                    self._update_time(pos_ms / 1000.0)
+
+                new_playing = self.player.is_playing() == 1
+                if new_playing != self.is_playing:
+                    self.is_playing = new_playing
+                    self._update_play_button()
+            except Exception as e:
+                print(f"[POPOUT] Poll error: {e}")
+
+            try:
+                self._poll_timer_id = self.after(1000, poll)
             except Exception:
                 pass
-
-            self._poll_timer_id = self.after(1000, poll)
 
         self._poll_timer_id = self.after(1000, poll)
 
     def _stop_poll(self):
-        """Stop the polling timer"""
         if hasattr(self, '_poll_timer_id') and self._poll_timer_id is not None:
             try:
                 self.after_cancel(self._poll_timer_id)
@@ -1566,7 +1626,6 @@ class QuickPlayerPopOut(tk.Toplevel):
             self._poll_timer_id = None
 
     def _update_time(self, current_time: float):
-        """Update time display and seek slider"""
         if self._closing:
             return
         if self.duration > 0:
@@ -1579,21 +1638,21 @@ class QuickPlayerPopOut(tk.Toplevel):
             self.seek_var.set(progress)
 
     def _update_play_button(self):
-        """Update play/pause button text"""
         if self._closing:
             return
         self.play_btn.configure(text="⏸" if self.is_playing else "▶")
 
     def _toggle_play(self):
-        """Toggle play/pause"""
         if self.player:
             try:
-                self.player.pause = not self.player.pause
+                if self.player.is_playing():
+                    self.player.set_pause(1)
+                else:
+                    self.player.set_pause(0)
             except:
                 pass
 
     def _stop(self):
-        """Stop playback"""
         if self.player:
             try:
                 self.player.stop()
@@ -1605,67 +1664,106 @@ class QuickPlayerPopOut(tk.Toplevel):
                 pass
 
     def _on_seek(self, value):
-        """Handle seek slider"""
         if self.player and self.duration > 0:
             try:
-                seek_time = (float(value) / 1000) * self.duration
-                self.player.seek(seek_time, 'absolute')
+                seek_ms = int((float(value) / 1000) * self.duration * 1000)
+                self.player.set_time(seek_ms)
             except:
                 pass
 
     def _seek_relative(self, seconds: int):
-        """Seek forward/backward by seconds"""
         if self.player:
             try:
-                self.player.seek(seconds, 'relative')
+                cur = self.player.get_time()
+                if cur is not None and cur >= 0:
+                    self.player.set_time(cur + int(seconds * 1000))
             except:
                 pass
 
     def _on_volume(self, value):
-        """Handle volume slider"""
         if self.player:
             try:
-                self.player.volume = int(value)
+                self.player.audio_set_volume(int(value))
             except:
                 pass
 
     def _adjust_volume(self, delta: int):
-        """Adjust volume by delta (0-150 range)"""
         current = self.vol_var.get()
         new_vol = max(0, min(150, current + delta))
         self.vol_var.set(new_vol)
         if self.player:
             try:
-                self.player.volume = new_vol
+                self.player.audio_set_volume(new_vol)
             except:
                 pass
 
     def _on_mousewheel_volume(self, event):
-        """Mouse wheel controls volume, linked to slider"""
         delta = 5 if event.delta > 0 else -5
         self._adjust_volume(delta)
 
     def _toggle_fullscreen(self):
-        """Toggle fullscreen mode"""
         self._is_fullscreen = not self._is_fullscreen
         self.attributes('-fullscreen', self._is_fullscreen)
 
-    def _on_mouse_move(self, event=None):
-        """Show controls on mouse movement"""
-        if not self._controls_visible:
+    def _start_cursor_poll(self):
+        """Poll Windows cursor position every 200ms to detect mouse movement.
+        VLC's DirectX surface steals mouse events from Tk, so we can't use
+        Tk's <Motion> binding on the video_frame. Instead we use ctypes
+        GetCursorPos to detect movement regardless of what has mouse capture."""
+        self._stop_cursor_poll()
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        def poll_cursor():
+            if self._closing:
+                return
+            try:
+                pt = POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                cx, cy = pt.x, pt.y
+                if cx != self._last_cursor_x or cy != self._last_cursor_y:
+                    self._last_cursor_x = cx
+                    self._last_cursor_y = cy
+                    self._show_controls()
+            except Exception:
+                pass
+            try:
+                self._cursor_poll_id = self.after(200, poll_cursor)
+            except Exception:
+                pass
+
+        self._cursor_poll_id = self.after(200, poll_cursor)
+
+    def _stop_cursor_poll(self):
+        if hasattr(self, '_cursor_poll_id') and self._cursor_poll_id is not None:
+            try:
+                self.after_cancel(self._cursor_poll_id)
+            except Exception:
+                pass
+            self._cursor_poll_id = None
+
+    def _show_controls(self):
+        """Show controls and reset the auto-hide timer"""
+        if not self._controls_visible and not self._closing:
             self.controls_frame.pack(side="bottom", fill="x")
             self._controls_visible = True
             self.configure(cursor='')
         self._reset_hide_timer()
 
+    def _on_mouse_move(self, event=None):
+        """Handle mouse motion on controls_frame (Tk events still work there)"""
+        self._show_controls()
+
     def _reset_hide_timer(self):
-        """Reset the auto-hide timer for controls"""
         if self._hide_timer:
-            self.after_cancel(self._hide_timer)
+            try:
+                self.after_cancel(self._hide_timer)
+            except Exception:
+                pass
         self._hide_timer = self.after(3000, self._hide_controls)
 
     def _hide_controls(self):
-        """Hide controls after timeout"""
         if self.is_playing and not self._closing:
             self.controls_frame.pack_forget()
             self._controls_visible = False
@@ -1675,32 +1773,36 @@ class QuickPlayerPopOut(tk.Toplevel):
         """Close the pop-out window and return to embedded mode"""
         self._closing = True
         self._stop_poll()
+        self._stop_cursor_poll()
 
-        # Get current position before closing
         resume_pos = 0.0
         if self.player:
             try:
-                pos = self.player.time_pos
-                if pos is not None:
-                    resume_pos = pos
+                pos_ms = self.player.get_time()
+                if pos_ms is not None and pos_ms >= 0:
+                    resume_pos = pos_ms / 1000.0
             except:
                 pass
 
-        # Clean up player
         if self.player:
             try:
                 self.player.stop()
                 _time.sleep(0.1)
-                self.player.terminate()
+                self.player.release()
             except:
                 pass
             self.player = None
 
-        # Cancel hide timer
+        if self._vlc_instance:
+            try:
+                self._vlc_instance.release()
+            except:
+                pass
+            self._vlc_instance = None
+
         if self._hide_timer:
             self.after_cancel(self._hide_timer)
 
-        # Notify parent to resume
         if self.on_close_callback:
             try:
                 self.on_close_callback(resume_pos)
@@ -1709,7 +1811,6 @@ class QuickPlayerPopOut(tk.Toplevel):
 
         self.destroy()
 
-        # If standalone, quit the app
         if self.standalone:
             try:
                 self.master.quit()

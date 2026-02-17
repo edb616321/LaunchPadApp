@@ -122,6 +122,12 @@
     "monitor": 0
   },
   {
+    "name": "QuickNews",
+    "path": "http://localhost:5000",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
     "name": "QuickMedia",
     "path": "D:\\QuickMedia\\quickmedia.py",
     "category": "Quick Links",
@@ -236,6 +242,12 @@
     "monitor": 0
   },
   {
+    "name": "Godot Cleaner",
+    "path": "D:\\LaunchPadApp\\godot_cleaner.py",
+    "category": "Utilities",
+    "monitor": 0
+  },
+  {
     "name": "Chrome Browser",
     "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "args": ["https://nc.brookmanfamily.com"],
@@ -318,6 +330,169 @@
     "name": "QuickTube",
     "path": "D:\\QuickTube\\quicktube.py",
     "category": "Media",
+    "monitor": 0
+  },
+  {
+    "name": "Zenva Academy",
+    "path": "https://academy.zenva.com",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "Udemy",
+    "path": "https://www.udemy.com",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "TutorialsPoint",
+    "path": "https://www.tutorialspoint.com",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "DigitalOcean Tutorials",
+    "path": "https://www.digitalocean.com/community/tutorials",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "RayWenderlich",
+    "path": "https://www.raywenderlich.com",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "ArtStation Learning",
+    "path": "https://www.artstation.com/learning",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "Microsoft Learn",
+    "path": "https://learn.microsoft.com",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "Google Cloud Skills",
+    "path": "https://www.cloudskillsboost.google",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "LinkedIn Learning",
+    "path": "https://www.linkedin.com/learning",
+    "category": "Learning and Certifications",
+    "monitor": 2
+  },
+  {
+    "name": "ESXi Console",
+    "path": "https://10.0.0.220/ui/",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "Windows-DevBox (RDP)",
+    "path": "C:\\Windows\\System32\\mstsc.exe",
+    "args": ["/v:10.0.0.207"],
+    "category": "Virtual Machines",
+    "monitor": 0
+  },
+  {
+    "name": "Nextcloud-Hub-25",
+    "path": "https://nc.brookmanfamily.com",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "LocalStack-AWS-Dev",
+    "path": "http://10.0.0.103:4566/_localstack/health",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "Nginx Reverse Proxy",
+    "path": "http://10.0.0.228/",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "GitLab Server",
+    "path": "https://gitlab.brookmanfamily.com",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "Supabase",
+    "path": "https://10.0.0.220/ui/",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "MatterMost",
+    "path": "https://10.0.0.220/ui/",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "Artist-MyGaia",
+    "path": "https://10.0.0.220/ui/",
+    "category": "Virtual Machines",
+    "monitor": 2
+  },
+  {
+    "name": "DVDFab 13",
+    "path": "C:\\Program Files\\DVDFab\\DVDFab 13\\DVDFab64.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "StreamFab",
+    "path": "C:\\Program Files\\DVDFab\\StreamFab\\StreamFab64.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "PlayerFab",
+    "path": "C:\\Program Files (x86)\\DVDFab\\PlayerFab\\PlayerFab.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "Passkey",
+    "path": "C:\\Program Files (x86)\\DVDFab\\Passkey\\DVDFabPasskey.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "UniFab",
+    "path": "C:\\Program Files\\UniFabAI\\UniFab\\unifab64.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "Video Enhancer AI",
+    "path": "C:\\Program Files\\DVDFab\\Video Enhancer AI\\DVDFab Video Enhancer AI.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "DVDFab Toolkit",
+    "path": "C:\\Program Files\\DVDFab\\Toolkit\\Toolkit64.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "Video Converter Pro",
+    "path": "C:\\Program Files\\DVDFab\\Video Converter Pro\\UniFab Video Converter Pro.exe",
+    "category": "DVDFab",
+    "monitor": 0
+  },
+  {
+    "name": "VideoCruise",
+    "path": "C:\\Program Files (x86)\\DVDFab\\VideoCruise\\VideoCruise.exe",
+    "category": "DVDFab",
     "monitor": 0
   }
 ]
