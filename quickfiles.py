@@ -2050,14 +2050,16 @@ class FileListPane(ctk.CTkFrame):
     def _on_path_entry_submit(self, event):
         """Handle path entry submission"""
         path = self.path_entry.get().strip()
-        if os.path.isdir(path):
+        # Let navigate_to handle it - it will show error via _load_directory if invalid
+        if path:
             self.navigate_to(path)
-        else:
-            messagebox.showwarning("Invalid Path", f"'{path}' is not a valid directory.")
 
     def navigate_to(self, path: str, add_to_history: bool = True):
         """Navigate to a directory"""
-        if not os.path.isdir(path):
+        # Skip os.path.isdir pre-check entirely. It can return False for SSHFS
+        # network drives (X:, Y:, Z:) intermittently. Instead, let _load_directory
+        # attempt os.scandir which gives a proper error if access fails.
+        if not path:
             return
 
         self.current_path = os.path.abspath(path)
@@ -2719,6 +2721,10 @@ class FileListPane(ctk.CTkFrame):
         menu.add_command(label="🗑️ Delete", command=self._delete_selected)
         menu.add_separator()
         menu.add_command(label="📁 New Folder", command=self._new_folder)
+        # Email File - only for files, not folders
+        if not item.is_dir:
+            menu.add_separator()
+            menu.add_command(label="📧 Email File", command=self._email_selected)
         menu.add_separator()
         menu.add_command(label="ℹ️ Properties", command=self._show_properties)
 
@@ -2742,8 +2748,8 @@ class FileListPane(ctk.CTkFrame):
                         self.items.append(item)
                     except (OSError, PermissionError):
                         pass
-        except (OSError, PermissionError) as e:
-            messagebox.showerror("Access Denied", f"Cannot access: {self.current_path}\n{e}")
+        except (OSError, PermissionError, TimeoutError) as e:
+            print(f"[QUICKFILES] Cannot access: {self.current_path} - {e}")
             return
 
         # Sort and display
@@ -3040,6 +3046,10 @@ class FileListPane(ctk.CTkFrame):
         menu.add_command(label="🗑️ Delete", command=self._delete_selected)
         menu.add_separator()
         menu.add_command(label="📁 New Folder", command=self._new_folder)
+        # Email File - only for single file selection, not folders
+        if paths and len(paths) == 1 and os.path.isfile(paths[0]):
+            menu.add_separator()
+            menu.add_command(label="📧 Email File", command=self._email_selected)
         menu.add_separator()
         menu.add_command(label="ℹ️ Properties", command=self._show_properties)
 
@@ -3161,6 +3171,132 @@ class FileListPane(ctk.CTkFrame):
     def _paste(self):
         """Paste from clipboard - placeholder"""
         pass  # Will be implemented by parent widget
+
+    def _email_selected(self):
+        """Email selected file using Windows MAPI (opens default email client with attachment)"""
+        paths = self.get_selected_paths()
+        if not paths:
+            return
+
+        file_path = paths[0]
+        if not os.path.isfile(file_path):
+            return
+
+        def send_via_mapi():
+            """Use Windows Simple MAPI to compose email with attachment"""
+            local_path = file_path
+            temp_copy = None
+            try:
+                import ctypes
+                import tempfile
+                import shutil
+                from ctypes import c_ulong, c_char_p, c_void_p, POINTER, Structure, pointer
+
+                # MAPI can't attach files from SSHFS/network drives directly.
+                # Copy to a local temp file first if the file is on a network drive.
+                drive = os.path.splitdrive(file_path)[0].upper()
+                network_drives = {'X:', 'Y:', 'Z:'}
+                is_network = drive in network_drives or file_path.startswith('\\\\')
+                if is_network:
+                    temp_dir = tempfile.mkdtemp(prefix="quickfiles_email_")
+                    filename = os.path.basename(file_path)
+                    temp_copy = os.path.join(temp_dir, filename)
+                    shutil.copy2(file_path, temp_copy)
+                    local_path = temp_copy
+
+                # MAPI structures
+                class MapiFileDesc(Structure):
+                    _fields_ = [
+                        ("ulReserved", c_ulong),
+                        ("flFlags", c_ulong),
+                        ("nPosition", c_ulong),
+                        ("lpszPathName", c_char_p),
+                        ("lpszFileName", c_char_p),
+                        ("lpFileType", c_void_p),
+                    ]
+
+                class MapiMessage(Structure):
+                    _fields_ = [
+                        ("ulReserved", c_ulong),
+                        ("lpszSubject", c_char_p),
+                        ("lpszNoteText", c_char_p),
+                        ("lpszMessageType", c_char_p),
+                        ("lpszDateReceived", c_char_p),
+                        ("lpszConversationID", c_char_p),
+                        ("flFlags", c_ulong),
+                        ("lpOriginator", c_void_p),
+                        ("nRecipCount", c_ulong),
+                        ("lpRecips", c_void_p),
+                        ("nFileCount", c_ulong),
+                        ("lpFiles", POINTER(MapiFileDesc)),
+                    ]
+
+                # Load MAPI32.dll
+                mapi = ctypes.windll.mapi32
+
+                # Set up attachment
+                filename = os.path.basename(local_path)
+                attachment = MapiFileDesc()
+                attachment.ulReserved = 0
+                attachment.flFlags = 0
+                attachment.nPosition = 0xFFFFFFFF  # -1 = don't embed in body
+                attachment.lpszPathName = local_path.encode('utf-8')
+                attachment.lpszFileName = filename.encode('utf-8')
+                attachment.lpFileType = None
+
+                # Set up message
+                msg = MapiMessage()
+                msg.ulReserved = 0
+                msg.lpszSubject = None
+                msg.lpszNoteText = None
+                msg.lpszMessageType = None
+                msg.lpszDateReceived = None
+                msg.lpszConversationID = None
+                msg.flFlags = 0
+                msg.lpOriginator = None
+                msg.nRecipCount = 0
+                msg.lpRecips = None
+                msg.nFileCount = 1
+                msg.lpFiles = pointer(attachment)
+
+                # MAPI_DIALOG = 8 (show compose window)
+                # MAPI_LOGON_UI = 1 (show logon UI if needed)
+                MAPI_DIALOG = 0x00000008
+                MAPI_LOGON_UI = 0x00000001
+
+                result = mapi.MAPISendMail(0, 0, pointer(msg), MAPI_DIALOG | MAPI_LOGON_UI, 0)
+
+                if result == 0:
+                    print(f"[QUICKFILES] Email sent/composed for: {filename}")
+                elif result == 1:
+                    # User cancelled - that's fine
+                    print(f"[QUICKFILES] Email cancelled by user")
+                else:
+                    print(f"[QUICKFILES] MAPI error code: {result}")
+                    # Fallback: try shell mailto
+                    self.after(0, lambda: messagebox.showwarning(
+                        "Email",
+                        f"MAPI returned error {result}.\n\n"
+                        f"Try dragging the file from:\n{file_path}\n\n"
+                        f"into your email compose window instead."
+                    ))
+
+            except Exception as e:
+                print(f"[QUICKFILES] MAPI email error: {e}")
+                self.after(0, lambda: messagebox.showerror("Email Error", f"Could not launch email client:\n{e}"))
+            finally:
+                # Clean up temp copy after a delay (give email client time to read it)
+                if temp_copy and os.path.exists(temp_copy):
+                    import time
+                    time.sleep(30)  # Wait for email client to read the file
+                    try:
+                        os.remove(temp_copy)
+                        os.rmdir(os.path.dirname(temp_copy))
+                    except OSError:
+                        pass  # File still in use or already cleaned up
+
+        # Run MAPI in a thread so it doesn't block the UI
+        threading.Thread(target=send_via_mapi, daemon=True).start()
 
     def _show_properties(self):
         """Show file properties"""
@@ -3836,11 +3972,12 @@ class QuickFilesWidget(ctk.CTkFrame):
         bookmark = self.bookmarks.get(key)
         if bookmark:
             path = bookmark.get("path") if isinstance(bookmark, dict) else bookmark
-            if path and os.path.isdir(path):
-                self._get_active_pane().navigate_to(path)
-                self._log(f"Jumped to {key}: {path}", "info")
-            elif path:
-                messagebox.showwarning("Bookmark", f"{key} path no longer exists:\n{path}")
+            if not path:
+                return
+            # For network/SSHFS drives, os.path.isdir can be slow or return False
+            # intermittently. Try to navigate directly - navigate_to will handle errors.
+            self._get_active_pane().navigate_to(path)
+            self._log(f"Jumped to {key}: {path}", "info")
 
     def _set_bookmark(self, key: str):
         """Set bookmark to current directory"""

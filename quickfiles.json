@@ -16,9 +16,13 @@
       "path": "D:\\QuickTube",
       "name": "QuickTube"
     },
-    "F:": {
-      "path": "F:\\",
-      "name": "F:"
+    "G:": {
+      "path": "G:\\",
+      "name": "G: LARGE_DATA"
+    },
+    "H:": {
+      "path": "H:\\",
+      "name": "H:"
     },
     "Downloads": {
       "path": "C:\\Users\\edb616321\\Downloads",
@@ -32,9 +36,29 @@
       "path": "C:\\Users\\edb616321\\Documents",
       "name": "Documents"
     },
+    "X:": {
+      "path": "X:\\",
+      "name": "X: nvme2 (251)"
+    },
+    "M:": {
+      "path": "M:\\",
+      "name": "M:"
+    },
+    "Y:": {
+      "path": "Y:\\",
+      "name": "Y: root (250)"
+    },
+    "Z:": {
+      "path": "Z:\\",
+      "name": "Z: root (251)"
+    },
     "Screenshots": {
       "path": "D:\\screenshots-new",
       "name": "Screenshots"
+    },
+    "F:": {
+      "path": "F:\\",
+      "name": "F:"
     },
     "F1": {
       "path": "D:\\",
@@ -63,11 +87,11 @@
     "F10": null
   },
   "left_pane": {
-    "path": "D:\\screenshots-new",
+    "path": "G:\\",
     "show_tree": true
   },
   "right_pane": {
-    "path": "D:\\",
+    "path": "Z:\\mnt\\nvme2\\edb_resume",
     "show_tree": true
   },
   "show_hidden": false,
