@@ -94,6 +94,9 @@ class CommandCenterApp(ctk.CTk):
         self.apps = []
         self.selected_monitor = 0  # Default to M3 (screeninfo index 0 - top-front monitor)
 
+        # Icon cache to avoid re-extracting icons on every refresh
+        self.icon_cache = {}
+
         # Build UI
         self.setup_ui()
 
@@ -270,6 +273,45 @@ class CommandCenterApp(ctk.CTk):
         # Initialize volume slider to current system volume
         self.init_volume()
 
+        # Mouse wheel anywhere in CCL = system volume control
+        self.bind_all('<MouseWheel>', self._on_mousewheel_volume)
+
+        # URL/Web Search bar
+        search_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        search_frame.pack(side="left", padx=30, pady=10)
+
+        search_label = ctk.CTkLabel(
+            search_frame,
+            text="🔍",
+            font=ctk.CTkFont(size=28)
+        )
+        search_label.pack(side="left", padx=(0, 10))
+
+        self.url_search_entry = ctk.CTkEntry(
+            search_frame,
+            width=400,
+            height=50,
+            font=ctk.CTkFont(size=20),
+            placeholder_text="Enter URL or search query...",
+            fg_color=COLORS["card_bg"],
+            border_color=COLORS["accent"],
+            text_color=COLORS["text"]
+        )
+        self.url_search_entry.pack(side="left", padx=(0, 10))
+        self.url_search_entry.bind("<Return>", self._on_url_search_submit)
+
+        go_btn = ctk.CTkButton(
+            search_frame,
+            text="Go",
+            width=70,
+            height=50,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            command=self._on_url_search_click
+        )
+        go_btn.pack(side="left")
+
         # Add App button - BIGGER
         add_btn = ctk.CTkButton(
             top_bar,
@@ -440,6 +482,82 @@ class CommandCenterApp(ctk.CTk):
         except Exception as e:
             print(f"Error setting volume: {e}")
 
+    def _on_mousewheel_volume(self, event):
+        """Mouse wheel adjusts system volume - only in header/quick links area"""
+        # Walk up widget tree to check what area the scroll is in
+        try:
+            widget = event.widget
+            while widget:
+                name = widget.__class__.__name__
+                # Skip if inside QuickPlayer (has its own volume control)
+                if name == 'QuickPlayerWidget':
+                    return
+                # Skip if inside QuickFiles (needs scroll for file browsing)
+                if name in ('FileListPane', 'QuickFilesWidget'):
+                    return
+                widget = widget.master
+        except Exception:
+            pass
+
+        # Also skip any scrollable widget directly (safety net)
+        try:
+            cls = event.widget.winfo_class().lower()
+            if 'canvas' in cls or 'listbox' in cls or 'text' in cls or 'treeview' in cls:
+                return
+        except Exception:
+            pass
+
+        # Adjust system volume by 2% per scroll notch
+        delta = 2 if event.delta > 0 else -2
+        try:
+            volume = self.get_volume_interface()
+            if volume:
+                current = volume.GetMasterVolumeLevelScalar() * 100
+                new_vol = max(0, min(100, current + delta))
+                volume.SetMasterVolumeLevelScalar(new_vol / 100, None)
+                self.volume_slider.set(new_vol)
+        except Exception:
+            pass
+
+    def _on_url_search_submit(self, event):
+        """Handle Enter key in URL/search bar"""
+        self._handle_url_search()
+
+    def _on_url_search_click(self):
+        """Handle Go button click"""
+        self._handle_url_search()
+
+    def _handle_url_search(self):
+        """Process URL or search query from the search bar"""
+        query = self.url_search_entry.get().strip()
+        if not query:
+            return
+
+        # Check if it's a URL (starts with http/https or looks like a domain)
+        is_url = (
+            query.startswith("http://") or
+            query.startswith("https://") or
+            query.startswith("www.") or
+            ("." in query and " " not in query and "/" in query) or
+            (query.count(".") >= 1 and " " not in query and len(query.split(".")[-1]) <= 4)
+        )
+
+        if is_url:
+            # It's a URL - open directly
+            url = query
+            if not url.startswith("http"):
+                url = "https://" + url
+            self.log_message(f"Opening URL: {url}", "info")
+            webbrowser.open(url)
+        else:
+            # It's a search query - use Google search
+            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            self.log_message(f"Web search: {query}", "info")
+            webbrowser.open(search_url)
+
+        # Clear the entry after submission
+        self.url_search_entry.delete(0, "end")
+
     def log_message(self, message: str, level: str = "info"):
         """Log a message (prints to console only now that Activity Log is replaced)"""
         # Get current timestamp
@@ -530,6 +648,7 @@ class CommandCenterApp(ctk.CTk):
             "Productivity",
             "Media",
             "Games",
+            "Learning and Certifications",
             "Other"
         ]
 
@@ -542,6 +661,9 @@ class CommandCenterApp(ctk.CTk):
 
         sorted_categories = sorted(categories.items(), key=lambda x: category_sort_key(x[0]))
 
+        # Cards per row - 3 per row
+        cards_per_row = 3
+
         # Display apps by category
         row = 0
         for category, apps in sorted_categories:
@@ -553,15 +675,15 @@ class CommandCenterApp(ctk.CTk):
                 text_color=COLORS["accent"],
                 anchor="w"
             )
-            cat_label.grid(row=row, column=0, columnspan=4, sticky="w", pady=(25, 15), padx=10)
+            cat_label.grid(row=row, column=0, columnspan=cards_per_row, sticky="w", pady=(25, 15), padx=10)
             row += 1
 
-            # App cards (4 per row for bigger 200px cards)
+            # App cards - dynamic columns based on panel width
             col = 0
             for app in apps:
                 self.create_app_card(self.app_grid, app, row, col)
                 col += 1
-                if col >= 4:  # 4 cards per row with bigger cards
+                if col >= cards_per_row:
                     col = 0
                     row += 1
 
@@ -640,10 +762,18 @@ class CommandCenterApp(ctk.CTk):
 
     def extract_icon(self, exe_path: str, size: int = 80):
         """Extract REAL icon from Windows executable or fetch favicon from URL"""
+        # Check cache first
+        cache_key = f"{exe_path}_{size}"
+        if cache_key in self.icon_cache:
+            return self.icon_cache[cache_key]
+
         try:
             # Handle URLs - fetch favicon
             if exe_path.startswith("http://") or exe_path.startswith("https://"):
-                return self.fetch_favicon(exe_path, size)
+                icon = self.fetch_favicon(exe_path, size)
+                if icon:
+                    self.icon_cache[cache_key] = icon
+                return icon
 
             # Check if file exists
             if not os.path.exists(exe_path):
@@ -685,6 +815,8 @@ class CommandCenterApp(ctk.CTk):
                     for icon in small:
                         win32gui.DestroyIcon(icon)
 
+                # Cache the icon
+                self.icon_cache[cache_key] = photo
                 return photo
 
         except Exception as e:
@@ -723,11 +855,11 @@ class CommandCenterApp(ctk.CTk):
                 f"{domain}/apple-touch-icon.png"
             ]
 
-            for favicon_url in favicon_urls:
+            for favicon_url in favicon_urls[:2]:  # Only try first 2 sources (Google + DuckDuckGo)
                 try:
-                    # Fetch favicon with timeout, disable SSL verification for internal IPs
+                    # Fetch favicon with short timeout, disable SSL verification for internal IPs
                     verify_ssl = not parsed.netloc.startswith('10.') and not parsed.netloc.startswith('192.168.')
-                    response = requests.get(favicon_url, timeout=3, headers={'User-Agent': 'Mozilla/5.0'}, verify=verify_ssl)
+                    response = requests.get(favicon_url, timeout=1, headers={'User-Agent': 'Mozilla/5.0'}, verify=verify_ssl)
 
                     if response.status_code == 200 and len(response.content) > 0:
                         # Load image from response
@@ -890,7 +1022,7 @@ class CommandCenterApp(ctk.CTk):
             width=440,
             height=35,
             variable=category_var,
-            values=["Quick Links", "AI", "Remote", "Development", "File Managers", "Utilities", "Web", "Productivity", "Media", "Games", "Other"]
+            values=["Quick Links", "AI", "Remote", "Development", "File Managers", "Utilities", "Web", "Productivity", "Media", "Games", "Learning and Certifications", "Other"]
         )
         category_menu.pack(pady=(0, 15))
 
@@ -995,7 +1127,7 @@ class CommandCenterApp(ctk.CTk):
 
             # Check if it's a URL
             if path.startswith("http://") or path.startswith("https://"):
-                subprocess.Popen(["start", path], shell=True)
+                webbrowser.open(path)
                 self.log_message(f"Opened URL: {app_name}", "success")
                 return
             # Check if it's a folder path
@@ -1188,7 +1320,7 @@ class CommandCenterApp(ctk.CTk):
             width=440,
             height=35,
             variable=category_var,
-            values=["Quick Links", "AI", "Remote", "Development", "File Managers", "Utilities", "Web", "Productivity", "Media", "Games", "Other"]
+            values=["Quick Links", "AI", "Remote", "Development", "File Managers", "Utilities", "Web", "Productivity", "Media", "Games", "Learning and Certifications", "Other"]
         )
         category_menu.pack(pady=(0, 15))
 

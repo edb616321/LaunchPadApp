@@ -2391,9 +2391,10 @@ class FileListPane(ctk.CTkFrame):
 
     def _create_thumbnail(self, parent, item: 'FileItem', size: int) -> tk.Frame:
         """Create a thumbnail widget for a file"""
-        # Card size - image takes most of the space
+        # Card size - image takes most of the space, extra room for filename text
         img_size = size - 10  # Image area
-        frame = tk.Frame(parent, bg=COLORS["card_bg"], width=size, height=size + 50)
+        text_height = 70 if size >= 300 else 55  # More room for wrapped filenames
+        frame = tk.Frame(parent, bg=COLORS["card_bg"], width=size, height=size + text_height)
         frame.pack_propagate(False)
 
         ext = os.path.splitext(item.name)[1].lower()
@@ -2418,18 +2419,25 @@ class FileListPane(ctk.CTkFrame):
             self._set_emoji_icon(thumb_label, ext, item.is_dir, img_size)
 
         # File name label - scale font with thumbnail size
-        max_chars = size // 6  # More chars for bigger thumbnails
-        display_name = item.name[:max_chars] + "..." if len(item.name) > max_chars else item.name
-
-        # Scale font size based on thumbnail size
+        # Allow wrapping to 3 lines max for readability
         if size >= 300:
-            font_size = 18  # XL view
+            font_size = 16
+            max_lines = 3
         elif size >= 200:
-            font_size = 14  # Large view
+            font_size = 13
+            max_lines = 2
         elif size >= 150:
-            font_size = 12  # Medium view
+            font_size = 11
+            max_lines = 2
         else:
-            font_size = 10  # Small view
+            font_size = 10
+            max_lines = 2
+
+        # Estimate chars per line and truncate only if truly excessive
+        avg_char_width = font_size * 0.55
+        chars_per_line = max(10, int(size / avg_char_width))
+        max_chars = chars_per_line * max_lines
+        display_name = item.name[:max_chars] + "..." if len(item.name) > max_chars else item.name
 
         name_label = tk.Label(
             frame,
@@ -2437,9 +2445,10 @@ class FileListPane(ctk.CTkFrame):
             font=("Segoe UI", font_size, "bold"),
             fg=COLORS["text"],
             bg=COLORS["card_bg"],
-            wraplength=size
+            wraplength=size - 10,
+            justify="center"
         )
-        name_label.pack(pady=6)
+        name_label.pack(pady=(2, 4))
 
         # Bind click events
         def on_double_click(e, item=item):
