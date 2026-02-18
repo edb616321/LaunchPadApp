@@ -13,7 +13,7 @@
       "name": "LaunchPad"
     },
     "QuickTube": {
-      "path": "D:\\QuickTube",
+      "path": "D:\\stacher_downloads",
       "name": "QuickTube"
     },
     "G:": {
@@ -42,7 +42,7 @@
     },
     "M:": {
       "path": "M:\\",
-      "name": "M:"
+      "name": "M: Plex (111)"
     },
     "Y:": {
       "path": "Y:\\",
@@ -87,11 +87,11 @@
     "F10": null
   },
   "left_pane": {
-    "path": "G:\\",
+    "path": "H:\\MUSIC\\DESKTOP MEDIA",
     "show_tree": true
   },
   "right_pane": {
-    "path": "Z:\\mnt\\nvme2\\edb_resume",
+    "path": "M:\\Movies",
     "show_tree": true
   },
   "show_hidden": false,

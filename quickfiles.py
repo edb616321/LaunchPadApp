@@ -2197,7 +2197,7 @@ class FileListPane(ctk.CTkFrame):
 
     def _refresh_thumbnail_view(self, load_more=False):
         """Refresh thumbnail view - loads items incrementally to prevent freezing"""
-        BATCH_SIZE = 100  # Load 100 items at a time
+        BATCH_SIZE = 500  # Load 500 items at a time
 
         if not load_more:
             # Full refresh - clear everything and reset counter
@@ -2312,7 +2312,7 @@ class FileListPane(ctk.CTkFrame):
             remaining = total_items - self._thumb_display_count
             load_more_btn = tk.Button(
                 nav_frame,
-                text=f"📁 Load Next 100 ({remaining} remaining)",
+                text=f"📁 Load Next 500 ({remaining} remaining)",
                 font=("Segoe UI", 16, "bold"),
                 bg=COLORS["accent"],
                 fg="white",
@@ -2323,9 +2323,13 @@ class FileListPane(ctk.CTkFrame):
             )
             load_more_btn.pack(side="left", padx=10)
 
-        # Update scroll region
+        # Update scroll region now and again after thumbnails finish loading
         self.thumb_inner.update_idletasks()
         self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
+        # Deferred updates - background thumbnails change widget sizes after initial layout
+        self.after(500, lambda: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all")))
+        self.after(2000, lambda: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all")))
+        self.after(5000, lambda: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all")))
 
     def _get_windows_icon(self, path: str, size: int) -> 'Image':
         """Extract Windows shell icon for a file/folder"""
@@ -2395,7 +2399,7 @@ class FileListPane(ctk.CTkFrame):
         """Create a thumbnail widget for a file"""
         # Card size - image takes most of the space, extra room for filename text
         img_size = size - 10  # Image area
-        text_height = 70 if size >= 300 else 55  # More room for wrapped filenames
+        text_height = 110 if size >= 300 else 80  # Room for 4-5 lines of wrapped filenames
         frame = tk.Frame(parent, bg=COLORS["card_bg"], width=size, height=size + text_height)
         frame.pack_propagate(False)
 
@@ -2926,6 +2930,13 @@ class FileListPane(ctk.CTkFrame):
         self._sort_items()
         self._refresh_view()
 
+    # Media extensions that QuickPlayer can handle
+    MEDIA_EXTENSIONS = {
+        '.mp3', '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm',
+        '.m4a', '.m4v', '.ogg', '.opus', '.flac', '.wav', '.aac', '.wma',
+        '.aiff', '.aif', '.aifc', '.mid', '.midi', '.3gp', '.ts', '.mts',
+    }
+
     def _on_double_click(self, event):
         """Handle double-click on treeview item"""
         selection = self.tree.selection()
@@ -2944,16 +2955,11 @@ class FileListPane(ctk.CTkFrame):
             if idx < len(self.recursive_results):
                 item = self.recursive_results[idx]
                 if item.is_dir:
-                    # Navigate to the directory and clear recursive search
                     self.recursive_var.set(False)
                     self.recursive_results = []
                     self.navigate_to(item.path)
                 else:
-                    # Open file
-                    try:
-                        os.startfile(item.path)
-                    except Exception as e:
-                        messagebox.showerror("Error", f"Cannot open: {e}")
+                    self._open_file(item)
         else:
             # Get the actual item from regular items
             idx = int(item_id)
@@ -2962,11 +2968,18 @@ class FileListPane(ctk.CTkFrame):
                 if item.is_dir:
                     self.navigate_to(item.path)
                 else:
-                    # Open file
-                    try:
-                        os.startfile(item.path)
-                    except Exception as e:
-                        messagebox.showerror("Error", f"Cannot open: {e}")
+                    self._open_file(item)
+
+    def _open_file(self, item):
+        """Open a file - media files go to QuickPlayer, others use OS default"""
+        ext = os.path.splitext(item.name)[1].lower()
+        if ext in self.MEDIA_EXTENSIONS and self.play_callback:
+            self.play_callback(item.path)
+        else:
+            try:
+                os.startfile(item.path)
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot open: {e}")
 
     def _go_parent(self, event):
         """Go to parent directory"""
@@ -4131,25 +4144,39 @@ class QuickFilesWidget(ctk.CTkFrame):
         CF_HDROP = 15
         files = []
         try:
+            import ctypes.wintypes
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
             shell32 = ctypes.windll.shell32
+
+            # Set proper types so ctypes handles 64-bit pointers correctly
+            user32.GetClipboardData.restype = ctypes.wintypes.HANDLE
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.wintypes.HGLOBAL]
+            kernel32.GlobalUnlock.argtypes = [ctypes.wintypes.HGLOBAL]
+            shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+            shell32.DragQueryFileW.restype = ctypes.c_uint
 
             if not user32.OpenClipboard(0):
                 return []
             try:
                 if not user32.IsClipboardFormatAvailable(CF_HDROP):
                     return []
-                h_drop = user32.GetClipboardData(CF_HDROP)
+                h_global = user32.GetClipboardData(CF_HDROP)
+                if not h_global:
+                    return []
+                h_drop = kernel32.GlobalLock(h_global)
                 if not h_drop:
                     return []
-                # DragQueryFileW with index 0xFFFFFFFF returns file count
-                count = shell32.DragQueryFileW(h_drop, 0xFFFFFFFF, None, 0)
-                for i in range(count):
-                    buf_size = shell32.DragQueryFileW(h_drop, i, None, 0) + 1
-                    buf = ctypes.create_unicode_buffer(buf_size)
-                    shell32.DragQueryFileW(h_drop, i, buf, buf_size)
-                    files.append(buf.value)
+                try:
+                    count = shell32.DragQueryFileW(h_drop, 0xFFFFFFFF, None, 0)
+                    for i in range(count):
+                        buf_size = shell32.DragQueryFileW(h_drop, i, None, 0) + 1
+                        buf = ctypes.create_unicode_buffer(buf_size)
+                        shell32.DragQueryFileW(h_drop, i, buf, buf_size)
+                        files.append(buf.value)
+                finally:
+                    kernel32.GlobalUnlock(h_global)
             finally:
                 user32.CloseClipboard()
         except Exception:

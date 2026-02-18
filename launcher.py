@@ -1480,8 +1480,31 @@ Accent Hover: {COLORS['accent_hover']}
         close_btn.pack(pady=(20, 0))
 
 
+def ensure_network_drives():
+    """Ensure network drives are mounted before app starts"""
+    # M: drive - NFS mount to Plex/NAS server
+    if not os.path.exists("M:\\"):
+        print("[DRIVES] M: not mounted, attempting NFS mount to 10.0.0.111...")
+        try:
+            result = subprocess.run(
+                ['cmd', '/c', r'C:\Windows\System32\mount.exe -U:edb616321 -p:#CLSadmin09 \\10.0.0.111\mnt\brkmn-main-pool\New-plexserver-dataset M:'],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                print("[DRIVES] M: mounted successfully")
+            else:
+                print(f"[DRIVES] M: mount failed: {result.stderr.strip()}")
+        except Exception as e:
+            print(f"[DRIVES] M: mount error: {e}")
+    else:
+        print("[DRIVES] M: already mounted")
+
+
 def main():
     """Main entry point"""
+    # Ensure network drives are available
+    ensure_network_drives()
+
     # Force appearance mode and disable default themes
     ctk.set_appearance_mode("dark")
     ctk.deactivate_automatic_dpi_awareness()
