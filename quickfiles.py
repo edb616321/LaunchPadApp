@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from file_operations import (
     FileOperationManager, OperationProgress, OperationType,
-    FileOperationResult, format_size, format_date
+    FileOperationResult, ConflictResolution, format_size, format_date
 )
 
 # Color theme matching CCL
@@ -40,6 +40,94 @@ COLORS = {
 
 QUICKFILES_CONFIG = "quickfiles.json"
 
+
+# --- Big themed dialogs (replace tiny system messageboxes) ---
+
+def _big_dialog(parent, title, message, buttons, icon_char=""):
+    """Create a large themed dialog. Returns the button text clicked."""
+    result = [None]
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title(title)
+    dlg.configure(fg_color=COLORS["bg_dark"])
+    dlg.grab_set()
+    dlg.focus_force()
+    dlg.resizable(False, False)
+
+    # Content frame
+    content = ctk.CTkFrame(dlg, fg_color="transparent")
+    content.pack(fill="both", expand=True, padx=30, pady=20)
+
+    # Icon + message
+    if icon_char:
+        ctk.CTkLabel(content, text=icon_char, font=ctk.CTkFont(size=48),
+                     text_color=COLORS["accent"]).pack(pady=(0, 10))
+
+    ctk.CTkLabel(content, text=message, font=ctk.CTkFont(size=22),
+                 text_color=COLORS["text"], wraplength=550,
+                 justify="center").pack(pady=(0, 20))
+
+    # Buttons
+    btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+    btn_frame.pack(pady=(0, 5))
+
+    def on_click(val):
+        result[0] = val
+        dlg.destroy()
+
+    for i, (label, color) in enumerate(buttons):
+        ctk.CTkButton(
+            btn_frame, text=label, width=160, height=45,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=color, hover_color=COLORS["accent_hover"],
+            command=lambda v=label: on_click(v)
+        ).pack(side="left", padx=8)
+
+    # Size and center
+    dlg.update_idletasks()
+    w = max(500, dlg.winfo_reqwidth() + 40)
+    h = dlg.winfo_reqheight() + 20
+    dlg.geometry(f"{w}x{h}")
+    try:
+        px = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        dlg.geometry(f"+{max(0,px)}+{max(0,py)}")
+    except Exception:
+        pass
+
+    dlg.wait_window()
+    return result[0]
+
+
+def big_showinfo(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", COLORS["accent"])], icon_char="i")
+
+
+def big_showerror(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", "#CC3333")], icon_char="!")
+
+
+def big_showwarning(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", "#CC8800")], icon_char="!")
+
+
+def big_askyesno(parent, title, message) -> bool:
+    r = _big_dialog(parent, title, message,
+                    [("Yes", COLORS["accent"]), ("No", COLORS["card_bg"])], icon_char="?")
+    return r == "Yes"
+
+
+def big_askyesnocancel(parent, title, message):
+    """Returns True=Yes, False=No, None=Cancel"""
+    r = _big_dialog(parent, title, message,
+                    [("Yes", COLORS["accent"]), ("No", COLORS["card_bg"]),
+                     ("Cancel", "#663333")], icon_char="?")
+    if r == "Yes":
+        return True
+    elif r == "No":
+        return False
+    return None
+
+
 # Default bookmarks with display names
 DEFAULT_BOOKMARKS = {
     "D:": {"path": "D:\\", "name": "D:"},
@@ -52,7 +140,7 @@ DEFAULT_BOOKMARKS = {
     "Desktop": {"path": "C:\\Users\\edb616321\\Desktop", "name": "Desktop"},
     "Documents": {"path": "C:\\Users\\edb616321\\Documents", "name": "Documents"},
     "X:": {"path": "X:\\", "name": "X: nvme2 (251)"},
-    "M:": {"path": "M:\\", "name": "M:"},
+    "M:": {"path": "\\\\10.0.0.111\\mnt\\brkmn-main-pool\\New-plexserver-dataset", "name": "M: Plex (111)"},
     "Y:": {"path": "Y:\\", "name": "Y: root (250)"},
     "Z:": {"path": "Z:\\", "name": "Z: root (251)"},
     "Screenshots": {"path": "D:\\screenshots-new", "name": "Screenshots"},
@@ -284,7 +372,7 @@ class AudioAdjustDialog(ctk.CTkToplevel):
 
     def _apply(self):
         if not self.ffmpeg_path:
-            messagebox.showerror("Error", "FFmpeg not found! Please install FFmpeg.")
+            big_showerror(self, "Error", "FFmpeg not found! Please install FFmpeg.")
             return
 
         volume_db = int(self.volume_slider.get())
@@ -302,7 +390,7 @@ class AudioAdjustDialog(ctk.CTkToplevel):
             filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
 
         if not filters:
-            messagebox.showinfo("Info", "No adjustments selected.")
+            big_showinfo(self, "Info", "No adjustments selected.")
             return
 
         filter_str = ",".join(filters)
@@ -462,7 +550,7 @@ class ConvertDialog(ctk.CTkToplevel):
 
     def _convert(self):
         if not self.ffmpeg_path:
-            messagebox.showerror("Error", "FFmpeg not found! Please install FFmpeg.")
+            big_showerror(self, "Error", "FFmpeg not found! Please install FFmpeg.")
             return
 
         target_format = self.format_var.get()
@@ -653,7 +741,7 @@ class MobileEmailDialog(ctk.CTkToplevel):
 
     def _optimize(self):
         if not self.ffmpeg_path:
-            messagebox.showerror("Error", "FFmpeg not found! Please install FFmpeg.")
+            big_showerror(self, "Error", "FFmpeg not found! Please install FFmpeg.")
             return
 
         preset = self.preset_var.get()
@@ -1677,7 +1765,7 @@ class FileListPane(ctk.CTkFrame):
         # Search entry with pattern hints - BIGGER
         # Use StringVar with trace_add for real-time filtering
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", self._on_search_change)
+        self._search_trace_id = self.search_var.trace_add("write", self._on_search_change)
 
         self.search_entry = ctk.CTkEntry(
             search_row,
@@ -1916,14 +2004,20 @@ class FileListPane(ctk.CTkFrame):
         self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
 
     def _on_search_change(self, *args):
-        """Filter file list based on search pattern - INSTANT filtering"""
+        """Filter file list based on search pattern - INSTANT filtering for local, DEBOUNCED for recursive"""
         pattern = self.search_var.get()
         recursive = self.recursive_var.get() if hasattr(self, 'recursive_var') else False
 
         if recursive and pattern:
-            # Do recursive search in background
-            self._do_recursive_search(pattern)
+            # Debounce recursive search - wait 500ms after last keystroke
+            if hasattr(self, '_search_debounce_id') and self._search_debounce_id:
+                self.after_cancel(self._search_debounce_id)
+            self._search_debounce_id = self.after(500, lambda: self._do_recursive_search(pattern))
         else:
+            # Cancel any pending debounced search
+            if hasattr(self, '_search_debounce_id') and self._search_debounce_id:
+                self.after_cancel(self._search_debounce_id)
+                self._search_debounce_id = None
             # Stop any running search animation
             self._searching_active = False
             # Clear recursive results if not searching recursively
@@ -1939,82 +2033,107 @@ class FileListPane(ctk.CTkFrame):
             self._on_search_change()
 
     def _do_recursive_search(self, pattern: str):
-        """Perform recursive search in background thread"""
+        """Recursive search: flat list of matching FILES only (like Windows Explorer)."""
         import threading
 
-        # Increment search ID to track which search is current
         if not hasattr(self, '_search_id'):
             self._search_id = 0
         self._search_id += 1
         current_search_id = self._search_id
-        search_pattern = pattern  # Capture pattern for this search
+        search_pattern = pattern
 
         def search_worker():
-            results = []
-            # System folders to skip during recursive search
+            files = []
             skip_dirs = {'$RECYCLE.BIN', '$Recycle.Bin', 'System Volume Information',
                          '$WinREAgent', '$SysReset', 'Recovery', '$GetCurrent'}
             try:
-                for root, dirs, files in os.walk(self.current_path):
-                    # Check if this search was superseded by a newer one
+                for root, dirs, filenames in os.walk(self.current_path):
                     if self._search_id != current_search_id:
-                        print(f"[RECURSIVE SEARCH] Cancelled search for '{search_pattern}' (superseded)")
                         return
-
-                    # Skip hidden directories and system folders
                     dirs[:] = [d for d in dirs if not d.startswith('.') and
                                not d.startswith('$') and d not in skip_dirs]
-
-                    for name in files:
+                    for name in filenames:
                         if self._match_pattern(name, search_pattern):
-                            full_path = os.path.join(root, name)
                             try:
-                                item = FileItem(full_path, is_dir=False)
-                                results.append(item)
+                                files.append(FileItem(os.path.join(root, name), is_dir=False))
                             except (OSError, PermissionError):
                                 pass
-
-                    # Also match directories
-                    for name in dirs:
-                        if self._match_pattern(name, search_pattern):
-                            full_path = os.path.join(root, name)
-                            try:
-                                item = FileItem(full_path, is_dir=True)
-                                results.append(item)
-                            except (OSError, PermissionError):
-                                pass
-
-                    # Limit results to prevent UI freeze
-                    if len(results) > 5000:
+                    if len(files) > 10000:
                         break
-
             except (OSError, PermissionError):
                 pass
 
-            # Only update UI if this is still the current search
-            if self._search_id == current_search_id:
-                self.recursive_results = results
-                self._searching_active = False  # Stop blinking
-                self.after(0, self._refresh_view)
-                print(f"[RECURSIVE SEARCH] Found {len(results)} matches for '{search_pattern}'")
-            else:
-                # Search was superseded - new search will handle blinking
-                print(f"[RECURSIVE SEARCH] Discarded results for '{search_pattern}' (superseded)")
+            if self._search_id != current_search_id:
+                return
+            files.sort(key=lambda x: x.name.lower())
+            self._search_done = (files, current_search_id)
 
-        # Start search in background
+        # Show "Searching..." immediately
         self.recursive_results = []
-        self._searching_active = True  # Flag for blinking animation
-
-        # Clear treeview and show "Searching..." immediately so user doesn't see old unfiltered content
+        self._searching_active = True
+        self._search_done = None
         self.tree.delete(*self.tree.get_children())
         self.tree.insert("", "end", iid="__searching__",
             values=("🔍 Searching subfolders...", "", "", ""))
-
-        # Start blinking animation
         self._start_search_blink(current_search_id)
 
-        thread = threading.Thread(target=search_worker, daemon=True)
-        thread.start()
+        # Start worker
+        threading.Thread(target=search_worker, daemon=True).start()
+
+        # Poll for completion from main thread
+        self._poll_search_done(current_search_id)
+
+    def _poll_search_done(self, search_id: int):
+        """Check if background search finished, then display results."""
+        if self._search_id != search_id:
+            return
+
+        done = getattr(self, '_search_done', None)
+        if done is None:
+            # Not done yet, check again in 200ms
+            self.after(200, lambda: self._poll_search_done(search_id))
+            return
+
+        files, done_id = done
+        if done_id != search_id:
+            return
+
+        self._searching_active = False
+        self.recursive_results = files
+        total = len(files)
+
+        print(f"[RECURSIVE SEARCH] Found {total} files for display")
+
+        # Clear and show flat file list with folder path context
+        self.tree.delete(*self.tree.get_children())
+
+        for idx, item in enumerate(files):
+            try:
+                rel_path = os.path.relpath(item.path, self.current_path)
+                parent_dir = os.path.dirname(rel_path)
+                display_name = f"{item.name}  [{parent_dir}]" if parent_dir else item.name
+            except ValueError:
+                display_name = item.name
+
+            size_str = format_size(item.size)
+            created_val = item.created or item.modified
+            created_str = self._format_datetime(created_val) if created_val else ""
+            modified_str = self._format_datetime(item.modified) if item.modified else ""
+
+            self.tree.insert("", "end", iid=f"r_{idx}",
+                values=(f"📄 {display_name}", size_str, created_str, modified_str))
+
+        # Also trigger thumbnail refresh if in thumbnail view
+        if self.view_mode != "list":
+            self._refresh_thumbnail_view()
+
+        # Update status
+        if total == 0:
+            self.search_result_label.configure(text="NO MATCHES", text_color="#FF6B6B")
+        elif total >= 10000:
+            self.search_result_label.configure(text=f"{total}+ files found", text_color="#FFD700")
+        else:
+            self.search_result_label.configure(text=f"{total} files found", text_color=COLORS["accent"])
 
     def _start_search_blink(self, search_id: int):
         """Animate blinking 'Searching...' label during recursive search"""
@@ -2459,6 +2578,17 @@ class FileListPane(ctk.CTkFrame):
         # Bind click events
         def on_double_click(e, item=item):
             if item.is_dir:
+                # Clear search state if we're in a recursive search
+                if getattr(self, 'recursive_results', None):
+                    self._searching_active = False
+                    self.recursive_results = []
+                    try:
+                        self.search_var.trace_remove("write", self._search_trace_id)
+                    except (ValueError, AttributeError):
+                        pass
+                    self.recursive_var.set(False)
+                    self.search_var.set("")
+                    self._search_trace_id = self.search_var.trace_add("write", self._on_search_change)
                 self.navigate_to(item.path)
             else:
                 self._play_in_quickplayer()
@@ -2720,6 +2850,14 @@ class FileListPane(ctk.CTkFrame):
         menu.add_command(label="📋 Copy", command=self._copy_selected)
         menu.add_command(label="✂️ Cut (Move)", command=self._move_selected)
         menu.add_command(label="📄 Paste", command=self._paste)
+        # Cross-pane operations (thumbnail view)
+        other = getattr(self, '_other_pane', None)
+        if other:
+            menu.add_separator()
+            menu.add_command(label="📋 Copy to Other Pane",
+                           command=lambda: self._copy_to_other_pane(other))
+            menu.add_command(label="✂️ Move to Other Pane",
+                           command=lambda: self._move_to_other_pane(other))
         menu.add_separator()
         menu.add_command(label="✏️ Rename", command=self._rename_selected)
         menu.add_command(label="🗑️ Delete", command=self._delete_selected)
@@ -2753,8 +2891,24 @@ class FileListPane(ctk.CTkFrame):
                     except (OSError, PermissionError):
                         pass
         except (OSError, PermissionError, TimeoutError) as e:
+            # For drive roots (M:\, X:\, etc.), schedule non-blocking retries
+            # since network/NFS mounts may not be ready at startup.
+            if len(self.current_path) <= 4:
+                retries_left = getattr(self, '_mount_retries', 10)
+                if retries_left > 0:
+                    self._mount_retries = retries_left - 1
+                    print(f"[QUICKFILES] {self.current_path} not ready, retry in 5s ({retries_left} left)")
+                    self.after(5000, self._load_directory)
+                    return
+                else:
+                    print(f"[QUICKFILES] {self.current_path} not available after retries")
+                    self._mount_retries = 10  # Reset for next manual attempt
+                    return
             print(f"[QUICKFILES] Cannot access: {self.current_path} - {e}")
             return
+
+        # Reset retry counter on success
+        self._mount_retries = 10
 
         # Sort and display
         self._sort_items()
@@ -2762,14 +2916,18 @@ class FileListPane(ctk.CTkFrame):
 
     def _refresh_tree_view(self):
         """Refresh the treeview with current items and search filter"""
-        # Clear treeview
-        self.tree.delete(*self.tree.get_children())
-
         # Get search pattern from StringVar
         pattern = self.search_var.get().strip() if hasattr(self, 'search_var') else ""
         recursive = self.recursive_var.get() if hasattr(self, 'recursive_var') else False
 
-        # Check if we're showing recursive results
+        # If a recursive search is actively streaming results, don't clear the tree
+        if recursive and pattern and getattr(self, '_searching_active', False):
+            return
+
+        # Clear treeview
+        self.tree.delete(*self.tree.get_children())
+
+        # Check if we're showing completed recursive results
         if recursive and pattern and hasattr(self, 'recursive_results') and self.recursive_results:
             # Show recursive search results
             self._display_recursive_results()
@@ -2955,8 +3113,19 @@ class FileListPane(ctk.CTkFrame):
             if idx < len(self.recursive_results):
                 item = self.recursive_results[idx]
                 if item.is_dir:
-                    self.recursive_var.set(False)
+                    # Clear ALL search state, suppress trace callbacks during cleanup
+                    self._searching_active = False
                     self.recursive_results = []
+                    # Temporarily remove trace to avoid triggering re-search
+                    try:
+                        self.search_var.trace_remove("write", self._search_trace_id)
+                    except (ValueError, AttributeError):
+                        pass
+                    self.recursive_var.set(False)
+                    self.search_var.set("")
+                    # Re-add trace
+                    self._search_trace_id = self.search_var.trace_add("write", self._on_search_change)
+                    # Now navigate - _load_directory will refresh the view cleanly
                     self.navigate_to(item.path)
                 else:
                     self._open_file(item)
@@ -2979,7 +3148,7 @@ class FileListPane(ctk.CTkFrame):
             try:
                 os.startfile(item.path)
             except Exception as e:
-                messagebox.showerror("Error", f"Cannot open: {e}")
+                big_showerror(self.winfo_toplevel(), "Error", f"Cannot open: {e}")
 
     def _go_parent(self, event):
         """Go to parent directory"""
@@ -3054,6 +3223,16 @@ class FileListPane(ctk.CTkFrame):
         menu.add_command(label="📋 Copy", command=self._copy_selected)
         menu.add_command(label="✂️ Cut (Move)", command=self._move_selected)
         menu.add_command(label="📄 Paste", command=self._paste)
+        # Cross-pane operations
+        other = getattr(self, '_other_pane', None)
+        if other and paths:
+            n = len(paths)
+            suffix = f" ({n} items)" if n > 1 else ""
+            menu.add_separator()
+            menu.add_command(label=f"📋 Copy to Other Pane{suffix}",
+                           command=lambda: self._copy_to_other_pane(other))
+            menu.add_command(label=f"✂️ Move to Other Pane{suffix}",
+                           command=lambda: self._move_to_other_pane(other))
         menu.add_separator()
         menu.add_command(label="✏️ Rename", command=self._rename_selected)
         menu.add_command(label="🗑️ Delete", command=self._delete_selected)
@@ -3085,7 +3264,11 @@ class FileListPane(ctk.CTkFrame):
             self._play_in_quickplayer()
 
     def _on_drag_start(self, event):
-        """Start drag operation"""
+        """Start drag operation - skip if Ctrl/Shift held (allow multi-select)"""
+        # Let Ctrl/Shift clicks pass through for native Treeview multi-select
+        if event.state & 0x4 or event.state & 0x1:  # Ctrl=0x4, Shift=0x1
+            self._drag_data["item"] = None
+            return
         item = self.tree.identify_row(event.y)
         if item and item not in ("__parent__", "__searching__"):
             self._drag_data["item"] = item
@@ -3104,7 +3287,7 @@ class FileListPane(ctk.CTkFrame):
                 self.tree.configure(cursor="hand2")
 
     def _on_drag_end(self, event):
-        """End drag operation - check if dropped on QuickPlayer"""
+        """End drag operation - check if dropped on QuickPlayer or other pane"""
         self.tree.configure(cursor="")
 
         if not self._drag_data["item"]:
@@ -3114,13 +3297,160 @@ class FileListPane(ctk.CTkFrame):
         dx = abs(event.x - self._drag_data["x"])
         dy = abs(event.y - self._drag_data["y"])
 
-        if dx > 30 or dy > 30:  # Significant movement = drag to player
-            # Select the dragged item and send to player
-            item = self._drag_data["item"]
-            self.tree.selection_set(item)
-            self._play_in_quickplayer()
+        if dx > 30 or dy > 30:  # Significant movement = actual drag
+            # Get mouse position in screen coordinates
+            try:
+                mx = event.x_root
+                my = event.y_root
+            except Exception:
+                mx, my = 0, 0
+
+            # Check if dropped on the other pane
+            other = getattr(self, '_other_pane', None)
+            if other and self._is_over_widget(other, mx, my):
+                self._drop_on_other_pane(other)
+            else:
+                # Original behavior: send to QuickPlayer
+                item = self._drag_data["item"]
+                if item not in self.tree.selection():
+                    self.tree.selection_set(item)
+                self._play_in_quickplayer()
 
         self._drag_data["item"] = None
+
+    def _is_over_widget(self, widget, screen_x, screen_y):
+        """Check if screen coordinates are over a widget"""
+        try:
+            wx = widget.winfo_rootx()
+            wy = widget.winfo_rooty()
+            ww = widget.winfo_width()
+            wh = widget.winfo_height()
+            return wx <= screen_x <= wx + ww and wy <= screen_y <= wy + wh
+        except Exception:
+            return False
+
+    def _drop_on_other_pane(self, other_pane):
+        """Handle dropping files on the other pane - delegate to parent widget"""
+        from tkinter import messagebox
+        paths = self.get_selected_paths()
+        if not paths:
+            # Fall back to the dragged item
+            item = self._drag_data.get("item")
+            if item:
+                self.tree.selection_set(item)
+                paths = self.get_selected_paths()
+        if not paths:
+            return
+
+        dest_dir = other_pane.current_path
+        if not dest_dir:
+            return
+
+        n = len(paths)
+        names = os.path.basename(paths[0]) if n == 1 else f"{n} files"
+
+        # Ask copy or move
+        answer = big_askyesnocancel(
+            self.winfo_toplevel(),
+            "Copy or Move",
+            f"Drop {names} into {dest_dir}\n\nYes = Copy  |  No = Move"
+        )
+        if answer is None:
+            return  # Cancel
+
+        # Find the QuickFilesWidget parent to use its op_manager
+        parent = self.master
+        while parent:
+            if hasattr(parent, 'op_manager'):
+                if answer:  # Yes = Copy
+                    parent.op_manager.copy_with_progress(
+                        paths, dest_dir,
+                        progress_callback=lambda p: None,
+                        complete_callback=lambda r: self._cross_pane_complete(
+                            "Copy", r, other_pane, is_move=False),
+                        conflict_callback=getattr(parent, '_ask_conflict_resolution', None)
+                    )
+                else:  # No = Move
+                    parent.op_manager.move_with_progress(
+                        paths, dest_dir,
+                        progress_callback=lambda p: None,
+                        complete_callback=lambda r: self._cross_pane_complete(
+                            "Move", r, other_pane, is_move=True),
+                        conflict_callback=getattr(parent, '_ask_conflict_resolution', None)
+                    )
+                return
+            parent = getattr(parent, 'master', None)
+
+        # Fallback: simple copy/move if no op_manager found
+        import shutil
+        errors = []
+        for src in paths:
+            try:
+                basename = os.path.basename(src)
+                dest = os.path.join(dest_dir, basename)
+                if answer:
+                    if os.path.isdir(src):
+                        shutil.copytree(src, dest)
+                    else:
+                        shutil.copy2(src, dest)
+                else:
+                    shutil.move(src, dest)
+            except Exception as e:
+                errors.append(f"{os.path.basename(src)}: {e}")
+        other_pane._load_directory(other_pane.current_path)
+        if not answer:
+            self._load_directory(self.current_path)
+        if errors:
+            big_showerror(self.winfo_toplevel(), "Errors", "\n".join(errors))
+
+    def _cross_pane_complete(self, action, result, other_pane, is_move=False):
+        """Callback after cross-pane copy/move completes"""
+        other_pane._load_directory(other_pane.current_path)
+        if is_move:
+            self._load_directory(self.current_path)
+        print(f"[QUICKFILES] {action} complete: {result}")
+
+    def _copy_to_other_pane(self, other_pane):
+        """Copy selected files to the other pane via context menu"""
+        paths = self.get_selected_paths()
+        if not paths:
+            return
+        dest_dir = other_pane.current_path
+        if not dest_dir:
+            return
+        parent = self.master
+        while parent:
+            if hasattr(parent, 'op_manager'):
+                parent.op_manager.copy_with_progress(
+                    paths, dest_dir,
+                    progress_callback=lambda p: None,
+                    complete_callback=lambda r: self._cross_pane_complete(
+                        "Copy", r, other_pane, is_move=False),
+                    conflict_callback=getattr(parent, '_ask_conflict_resolution', None)
+                )
+                return
+            parent = getattr(parent, 'master', None)
+
+    def _move_to_other_pane(self, other_pane):
+        """Move selected files to the other pane via context menu"""
+        paths = self.get_selected_paths()
+        if not paths:
+            return
+        dest_dir = other_pane.current_path
+        if not dest_dir:
+            return
+        parent = self.master
+        while parent:
+            if hasattr(parent, 'op_manager'):
+                parent.op_manager.move_with_progress(
+                    paths, dest_dir,
+                    progress_callback=lambda p: None,
+                    complete_callback=lambda r: self._cross_pane_complete(
+                        "Move", r, other_pane, is_move=True),
+                    conflict_callback=getattr(parent, '_ask_conflict_resolution', None)
+                )
+                return
+            parent = getattr(parent, 'master', None)
 
     def _get_log_callback(self):
         """Get log callback from parent widget if available"""
@@ -3287,16 +3617,15 @@ class FileListPane(ctk.CTkFrame):
                 else:
                     print(f"[QUICKFILES] MAPI error code: {result}")
                     # Fallback: try shell mailto
-                    self.after(0, lambda: messagebox.showwarning(
-                        "Email",
+                    self.after(0, lambda: big_showwarning(
+                        self.winfo_toplevel(), "Email",
                         f"MAPI returned error {result}.\n\n"
-                        f"Try dragging the file from:\n{file_path}\n\n"
-                        f"into your email compose window instead."
+                        f"Try dragging the file into your email compose window instead."
                     ))
 
             except Exception as e:
                 print(f"[QUICKFILES] MAPI email error: {e}")
-                self.after(0, lambda: messagebox.showerror("Email Error", f"Could not launch email client:\n{e}"))
+                self.after(0, lambda: big_showerror(self.winfo_toplevel(), "Email Error", f"Could not launch email client:\n{e}"))
             finally:
                 # Clean up temp copy after a delay (give email client time to read it)
                 if temp_copy and os.path.exists(temp_copy):
@@ -3329,9 +3658,9 @@ class FileListPane(ctk.CTkFrame):
             info += f"Created: {created}\n"
             info += f"Modified: {modified}"
 
-            messagebox.showinfo("Properties", info)
+            big_showinfo(self.winfo_toplevel(), "Properties", info)
         except Exception as e:
-            messagebox.showerror("Error", f"Cannot get properties: {e}")
+            big_showerror(self.winfo_toplevel(), "Error", f"Cannot get properties: {e}")
 
     def get_selected_paths(self) -> List[str]:
         """Get list of selected file paths from Treeview or Thumbnail view"""
@@ -3405,13 +3734,24 @@ class FileListPane(ctk.CTkFrame):
         paths = self.get_selected_paths()
         for path in paths:
             if os.path.isdir(path):
+                # Clear search state if navigating from search results
+                if getattr(self, 'recursive_results', None):
+                    self._searching_active = False
+                    self.recursive_results = []
+                    try:
+                        self.search_var.trace_remove("write", self._search_trace_id)
+                    except (ValueError, AttributeError):
+                        pass
+                    self.recursive_var.set(False)
+                    self.search_var.set("")
+                    self._search_trace_id = self.search_var.trace_add("write", self._on_search_change)
                 self.navigate_to(path)
                 break  # Only navigate to first folder
             else:
                 try:
                     os.startfile(path)
                 except Exception as e:
-                    messagebox.showerror("Error", f"Cannot open: {e}")
+                    big_showerror(self.winfo_toplevel(), "Error", f"Cannot open: {e}")
 
     def _copy_selected(self):
         """Trigger copy operation - handled by parent"""
@@ -3429,8 +3769,8 @@ class FileListPane(ctk.CTkFrame):
 
         count = len(paths)
 
-        if messagebox.askyesno("Confirm Delete",
-            f"Delete {count} item(s) to Recycle Bin?"):
+        if big_askyesno(self.winfo_toplevel(), "Confirm Delete",
+                       f"Delete {count} item(s) to Recycle Bin?"):
 
             op_mgr = FileOperationManager()
             op_mgr.delete_with_progress(
@@ -3443,29 +3783,29 @@ class FileListPane(ctk.CTkFrame):
         """Rename selected item"""
         paths = self.get_selected_paths()
         if len(paths) != 1:
-            messagebox.showwarning("Rename", "Select exactly one item to rename.")
+            big_showwarning(self.winfo_toplevel(), "Rename", "Select exactly one item to rename.")
             return
 
         item_path = paths[0]
         old_name = os.path.basename(item_path)
 
-        # Create rename dialog
+        # Create rename dialog - BIG
         dialog = ctk.CTkToplevel(self)
         dialog.title("Rename")
-        dialog.geometry("400x120")
+        dialog.geometry("600x200")
         dialog.configure(fg_color=COLORS["bg_dark"])
         dialog.grab_set()
 
         ctk.CTkLabel(
             dialog,
             text="New name:",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(size=22),
             text_color=COLORS["text"]
         ).pack(pady=(20, 5))
 
-        entry = ctk.CTkEntry(dialog, width=350, height=35)
+        entry = ctk.CTkEntry(dialog, width=520, height=45, font=ctk.CTkFont(size=20))
         entry.insert(0, old_name)
-        entry.pack(pady=5)
+        entry.pack(pady=10)
         entry.select_range(0, len(old_name) - len(Path(old_name).suffix) if "." in old_name else len(old_name))
         entry.focus_set()
 
@@ -3477,7 +3817,7 @@ class FileListPane(ctk.CTkFrame):
                     os.rename(item_path, new_path)
                     self.refresh()
                 except Exception as e:
-                    messagebox.showerror("Rename Error", str(e))
+                    big_showerror(dialog, "Rename Error", str(e))
             dialog.destroy()
 
         entry.bind("<Return>", lambda e: do_rename())
@@ -3486,35 +3826,37 @@ class FileListPane(ctk.CTkFrame):
         btn_frame.pack(pady=10)
 
         ctk.CTkButton(
-            btn_frame, text="Rename", width=100,
+            btn_frame, text="Rename", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
             command=do_rename
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
         ctk.CTkButton(
-            btn_frame, text="Cancel", width=100,
+            btn_frame, text="Cancel", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
             command=dialog.destroy
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
     def _new_folder(self):
         """Create new folder"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("New Folder")
-        dialog.geometry("400x120")
+        dialog.geometry("600x200")
         dialog.configure(fg_color=COLORS["bg_dark"])
         dialog.grab_set()
 
         ctk.CTkLabel(
             dialog,
             text="Folder name:",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(size=22),
             text_color=COLORS["text"]
         ).pack(pady=(20, 5))
 
-        entry = ctk.CTkEntry(dialog, width=350, height=35)
+        entry = ctk.CTkEntry(dialog, width=520, height=45, font=ctk.CTkFont(size=20))
         entry.insert(0, "New Folder")
-        entry.pack(pady=5)
+        entry.pack(pady=10)
         entry.select_range(0, "end")
         entry.focus_set()
 
@@ -3526,9 +3868,9 @@ class FileListPane(ctk.CTkFrame):
                     os.makedirs(new_path, exist_ok=False)
                     self.refresh()
                 except FileExistsError:
-                    messagebox.showerror("Error", f"Folder '{name}' already exists.")
+                    big_showerror(dialog, "Error", f"Folder '{name}' already exists.")
                 except Exception as e:
-                    messagebox.showerror("Error", str(e))
+                    big_showerror(dialog, "Error", str(e))
             dialog.destroy()
 
         entry.bind("<Return>", lambda e: do_create())
@@ -3537,35 +3879,37 @@ class FileListPane(ctk.CTkFrame):
         btn_frame.pack(pady=10)
 
         ctk.CTkButton(
-            btn_frame, text="Create", width=100,
+            btn_frame, text="Create", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
             command=do_create
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
         ctk.CTkButton(
-            btn_frame, text="Cancel", width=100,
+            btn_frame, text="Cancel", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
             command=dialog.destroy
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
     def _new_file(self):
         """Create new file"""
         dialog = ctk.CTkToplevel(self)
         dialog.title("New File")
-        dialog.geometry("400x120")
+        dialog.geometry("600x200")
         dialog.configure(fg_color=COLORS["bg_dark"])
         dialog.grab_set()
 
         ctk.CTkLabel(
             dialog,
             text="File name:",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(size=22),
             text_color=COLORS["text"]
         ).pack(pady=(20, 5))
 
-        entry = ctk.CTkEntry(dialog, width=350, height=35)
+        entry = ctk.CTkEntry(dialog, width=520, height=45, font=ctk.CTkFont(size=20))
         entry.insert(0, "new_file.txt")
-        entry.pack(pady=5)
+        entry.pack(pady=10)
         entry.select_range(0, entry.get().rfind('.'))  # Select name without extension
         entry.focus_set()
 
@@ -3575,13 +3919,13 @@ class FileListPane(ctk.CTkFrame):
                 new_path = os.path.join(self.current_path, name)
                 try:
                     if os.path.exists(new_path):
-                        messagebox.showerror("Error", f"File '{name}' already exists.")
+                        big_showerror(dialog, "Error", f"File '{name}' already exists.")
                         return
                     with open(new_path, 'w') as f:
                         pass  # Create empty file
                     self.refresh()
                 except Exception as e:
-                    messagebox.showerror("Error", str(e))
+                    big_showerror(dialog, "Error", str(e))
             dialog.destroy()
 
         entry.bind("<Return>", lambda e: do_create())
@@ -3590,16 +3934,18 @@ class FileListPane(ctk.CTkFrame):
         btn_frame.pack(pady=10)
 
         ctk.CTkButton(
-            btn_frame, text="Create", width=100,
+            btn_frame, text="Create", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
             command=do_create
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
         ctk.CTkButton(
-            btn_frame, text="Cancel", width=100,
+            btn_frame, text="Cancel", width=150, height=42,
+            font=ctk.CTkFont(size=20, weight="bold"),
             fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
             command=dialog.destroy
-        ).pack(side="left", padx=5)
+        ).pack(side="left", padx=8)
 
 
 class QuickFilesWidget(ctk.CTkFrame):
@@ -3786,10 +4132,15 @@ class QuickFilesWidget(ctk.CTkFrame):
         self.right_pane._paste = lambda: self._clipboard_paste("right")
 
         # Track clicks on panes to set active pane
-        self.left_pane.tree.bind("<Button-1>", lambda e: self._set_active_pane("left"))
+        # MUST use add="+" to not override existing <ButtonPress-1> drag bindings
+        self.left_pane.tree.bind("<Button-1>", lambda e: self._set_active_pane("left"), add="+")
         self.left_pane.tree.bind("<FocusIn>", lambda e: self._set_active_pane("left"))
-        self.right_pane.tree.bind("<Button-1>", lambda e: self._set_active_pane("right"))
+        self.right_pane.tree.bind("<Button-1>", lambda e: self._set_active_pane("right"), add="+")
         self.right_pane.tree.bind("<FocusIn>", lambda e: self._set_active_pane("right"))
+
+        # Wire up cross-pane references for drag-and-drop between panes
+        self.left_pane._other_pane = self.right_pane
+        self.right_pane._other_pane = self.left_pane
 
         # Set initial active pane visual indicator
         self._update_pane_indicators()
@@ -4011,14 +4362,14 @@ class QuickFilesWidget(ctk.CTkFrame):
 
         paths = source_pane.get_selected_paths()
         if not paths:
-            messagebox.showinfo("Copy", "No files selected.")
+            big_showinfo(self, "Copy", "No files selected.")
             return
 
         count = len(paths)
         dest = dest_pane.current_path
 
-        if messagebox.askyesno("Confirm Copy",
-            f"Copy {count} item(s) to:\n{dest}?"):
+        if big_askyesno(self, "Confirm Copy",
+                        f"Copy {count} item(s) to:\n{dest}?"):
 
             self._log(f"Copying {count} items to {dest}", "info")
 
@@ -4026,7 +4377,8 @@ class QuickFilesWidget(ctk.CTkFrame):
                 paths,
                 dest,
                 progress_callback=lambda p: self._update_progress(p),
-                complete_callback=lambda r: self._operation_complete("Copy", r, dest_pane)
+                complete_callback=lambda r: self._operation_complete("Copy", r, dest_pane),
+                conflict_callback=self._ask_conflict_resolution
             )
 
     def _move_to_other(self):
@@ -4036,14 +4388,14 @@ class QuickFilesWidget(ctk.CTkFrame):
 
         paths = source_pane.get_selected_paths()
         if not paths:
-            messagebox.showinfo("Move", "No files selected.")
+            big_showinfo(self, "Move", "No files selected.")
             return
 
         count = len(paths)
         dest = dest_pane.current_path
 
-        if messagebox.askyesno("Confirm Move",
-            f"Move {count} item(s) to:\n{dest}?"):
+        if big_askyesno(self, "Confirm Move",
+                        f"Move {count} item(s) to:\n{dest}?"):
 
             self._log(f"Moving {count} items to {dest}", "info")
 
@@ -4051,7 +4403,8 @@ class QuickFilesWidget(ctk.CTkFrame):
                 paths,
                 dest,
                 progress_callback=lambda p: self._update_progress(p),
-                complete_callback=lambda r: self._operation_complete("Move", r, dest_pane, source_pane)
+                complete_callback=lambda r: self._operation_complete("Move", r, dest_pane, source_pane),
+                conflict_callback=self._ask_conflict_resolution
             )
 
     def _delete_selected(self):
@@ -4060,13 +4413,13 @@ class QuickFilesWidget(ctk.CTkFrame):
         paths = pane.get_selected_paths()
 
         if not paths:
-            messagebox.showinfo("Delete", "No files selected.")
+            big_showinfo(self, "Delete", "No files selected.")
             return
 
         count = len(paths)
 
-        if messagebox.askyesno("Confirm Delete",
-            f"Delete {count} item(s) to Recycle Bin?"):
+        if big_askyesno(self, "Confirm Delete",
+                        f"Delete {count} item(s) to Recycle Bin?"):
 
             self._log(f"Deleting {count} items", "warning")
 
@@ -4081,6 +4434,101 @@ class QuickFilesWidget(ctk.CTkFrame):
         self.after(0, lambda: self.status_label.configure(
             text=f"{progress.operation.value.capitalize()}: {progress.current_file} ({progress.percent:.0f}%)"
         ))
+
+    def _ask_conflict_resolution(self, source: str, dest: str) -> ConflictResolution:
+        """Ask user how to handle a file conflict. Thread-safe - blocks caller until answered."""
+        result = [ConflictResolution.SKIP]  # Default
+        event = threading.Event()
+
+        def _show_dialog():
+            src_name = os.path.basename(source)
+            dest_dir = os.path.dirname(dest)
+            try:
+                src_size = format_size(os.path.getsize(source))
+                src_time = format_date(os.path.getmtime(source))
+            except OSError:
+                src_size = "?"
+                src_time = "?"
+            try:
+                dst_size = format_size(os.path.getsize(dest))
+                dst_time = format_date(os.path.getmtime(dest))
+            except OSError:
+                dst_size = "?"
+                dst_time = "?"
+
+            dlg_w, dlg_h = 700, 380
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("File Conflict")
+            dialog.geometry(f"{dlg_w}x{dlg_h}")
+            dialog.configure(fg_color=COLORS["bg_dark"])
+            dialog.grab_set()
+            dialog.attributes("-topmost", True)
+            dialog.resizable(False, False)
+
+            # Center on screen
+            dialog.update_idletasks()
+            x = (dialog.winfo_screenwidth() - dlg_w) // 2
+            y = (dialog.winfo_screenheight() - dlg_h) // 2
+            dialog.geometry(f"{dlg_w}x{dlg_h}+{x}+{y}")
+
+            ctk.CTkLabel(
+                dialog, text="File Already Exists",
+                font=ctk.CTkFont(size=26, weight="bold"),
+                text_color=COLORS["accent"]
+            ).pack(pady=(15, 5))
+
+            ctk.CTkLabel(
+                dialog,
+                text=f'"{src_name}" already exists in the destination.',
+                font=ctk.CTkFont(size=20),
+                text_color="#FFFFFF", wraplength=620
+            ).pack(pady=(0, 10))
+
+            info_frame = ctk.CTkFrame(dialog, fg_color=COLORS["card_bg"], corner_radius=8)
+            info_frame.pack(padx=25, pady=8, fill="x")
+            ctk.CTkLabel(
+                info_frame,
+                text=f"Source:        {src_size}   {src_time}\nDestination:  {dst_size}   {dst_time}",
+                font=ctk.CTkFont(family="Consolas", size=18),
+                text_color="#DDDDDD", justify="left"
+            ).pack(padx=15, pady=12)
+
+            btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+            btn_frame.pack(pady=15, fill="x", padx=25)
+
+            def choose(res):
+                result[0] = res
+                dialog.destroy()
+                event.set()
+
+            btn_cfg = {"height": 42, "font": ctk.CTkFont(size=18, weight="bold"), "corner_radius": 6}
+
+            ctk.CTkButton(btn_frame, text="Overwrite", width=120,
+                          fg_color="#CC3333", hover_color="#EE4444",
+                          command=lambda: choose(ConflictResolution.OVERWRITE),
+                          **btn_cfg).pack(side="left", padx=4)
+            ctk.CTkButton(btn_frame, text="Overwrite All", width=140,
+                          fg_color="#992222", hover_color="#CC3333",
+                          command=lambda: choose(ConflictResolution.OVERWRITE_ALL),
+                          **btn_cfg).pack(side="left", padx=4)
+            ctk.CTkButton(btn_frame, text="Skip", width=90,
+                          fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
+                          command=lambda: choose(ConflictResolution.SKIP),
+                          **btn_cfg).pack(side="left", padx=4)
+            ctk.CTkButton(btn_frame, text="Skip All", width=110,
+                          fg_color=COLORS["card_bg"], hover_color=COLORS["card_hover"],
+                          command=lambda: choose(ConflictResolution.SKIP_ALL),
+                          **btn_cfg).pack(side="left", padx=4)
+            ctk.CTkButton(btn_frame, text="Rename", width=100,
+                          fg_color="#336633", hover_color="#448844",
+                          command=lambda: choose(ConflictResolution.RENAME),
+                          **btn_cfg).pack(side="left", padx=4)
+
+            dialog.protocol("WM_DELETE_WINDOW", lambda: choose(ConflictResolution.SKIP))
+
+        self.after(0, _show_dialog)
+        event.wait()  # Block worker thread until user decides
+        return result[0]
 
     def _operation_complete(
         self,
@@ -4101,8 +4549,8 @@ class QuickFilesWidget(ctk.CTkFrame):
                 # Show error details
                 if errors:
                     error_msg = "\n".join(errors[:5])
-                    messagebox.showerror(f"{op_name} Error",
-                        f"{failed} item(s) failed:\n\n{error_msg}")
+                    big_showerror(self, f"{op_name} Error",
+                                  f"{failed} item(s) failed:\n\n{error_msg}")
             for p in panes_to_refresh:
                 if p:
                     p.refresh()
@@ -4184,39 +4632,72 @@ class QuickFilesWidget(ctk.CTkFrame):
         return files
 
     def _set_windows_clipboard_files(self, paths: List[str]):
-        """Put file paths onto Windows clipboard as CF_HDROP"""
+        """Put file paths onto Windows clipboard as CF_HDROP so they can be pasted in Explorer etc."""
         CF_HDROP = 15
+        GMEM_MOVEABLE = 0x0002
+        GMEM_ZEROINIT = 0x0040
         try:
             import struct
+            import ctypes.wintypes
+
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
-            # Build DROPFILES structure + null-terminated file list
-            # DROPFILES: pFiles(DWORD) + pt.x(LONG) + pt.y(LONG) + fNC(BOOL) + fWide(BOOL)
-            offset = 20  # sizeof(DROPFILES)
-            file_list = "\0".join(paths) + "\0\0"
-            data = struct.pack("IiiII", offset, 0, 0, 0, 1)  # fWide=1 for Unicode
-            data += file_list.encode("utf-16-le")
+            # Set proper 64-bit pointer types (CRITICAL on 64-bit Windows)
+            kernel32.GlobalAlloc.restype = ctypes.wintypes.HGLOBAL
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.wintypes.HGLOBAL]
+            kernel32.GlobalUnlock.argtypes = [ctypes.wintypes.HGLOBAL]
+            kernel32.GlobalFree.argtypes = [ctypes.wintypes.HGLOBAL]
+            user32.OpenClipboard.argtypes = [ctypes.wintypes.HWND]
+            user32.SetClipboardData.restype = ctypes.wintypes.HANDLE
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.wintypes.HANDLE]
 
-            GMEM_MOVEABLE = 0x0002
-            h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            # Build DROPFILES structure + double-null-terminated wide file list
+            # DROPFILES: pFiles(DWORD) + pt.x(LONG) + pt.y(LONG) + fNC(BOOL) + fWide(BOOL) = 20 bytes
+            header = struct.pack("IiiII", 20, 0, 0, 0, 1)  # fWide=1 for Unicode
+            file_list = "\0".join(paths) + "\0\0"
+            file_bytes = file_list.encode("utf-16-le")
+            data = header + file_bytes
+
+            h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len(data))
             if not h_global:
+                print(f"[CLIPBOARD] GlobalAlloc failed for {len(data)} bytes")
                 return
             locked = kernel32.GlobalLock(h_global)
             if not locked:
+                print("[CLIPBOARD] GlobalLock failed")
                 kernel32.GlobalFree(h_global)
                 return
             ctypes.memmove(locked, data, len(data))
             kernel32.GlobalUnlock(h_global)
 
-            if user32.OpenClipboard(0):
-                try:
-                    user32.EmptyClipboard()
-                    user32.SetClipboardData(CF_HDROP, h_global)
-                finally:
-                    user32.CloseClipboard()
-        except Exception:
-            pass
+            # Try to open clipboard (retry up to 5 times if another app has it locked)
+            opened = False
+            for attempt in range(5):
+                if user32.OpenClipboard(None):
+                    opened = True
+                    break
+                import time
+                time.sleep(0.05)
+
+            if not opened:
+                print("[CLIPBOARD] Failed to open clipboard after 5 attempts")
+                kernel32.GlobalFree(h_global)
+                return
+
+            try:
+                user32.EmptyClipboard()
+                result = user32.SetClipboardData(CF_HDROP, h_global)
+                if result:
+                    print(f"[CLIPBOARD] Set {len(paths)} file(s) on Windows clipboard")
+                else:
+                    print(f"[CLIPBOARD] SetClipboardData returned NULL, error={ctypes.GetLastError()}")
+            finally:
+                user32.CloseClipboard()
+        except Exception as e:
+            print(f"[CLIPBOARD] Error setting clipboard: {e}")
 
     def _clipboard_copy(self, pane: str):
         """Copy selected files to clipboard"""
@@ -4224,12 +4705,13 @@ class QuickFilesWidget(ctk.CTkFrame):
         paths = source_pane.get_selected_paths()
 
         if not paths:
-            messagebox.showinfo("Copy", "No files selected.")
+            big_showinfo(self, "Copy", "No files selected.")
             return
 
         self.clipboard_paths = paths
         self.clipboard_operation = "copy"
-        # Also put on Windows clipboard so files can be pasted in Explorer
+        # Put on Windows system clipboard so files can be pasted in Explorer, desktop, etc.
+        print(f"[CLIPBOARD] Copying {len(paths)} path(s): {paths}")
         self._set_windows_clipboard_files(paths)
         self._log(f"Copied {len(paths)} item(s) to clipboard", "info")
         self._update_status()
@@ -4240,7 +4722,7 @@ class QuickFilesWidget(ctk.CTkFrame):
         paths = source_pane.get_selected_paths()
 
         if not paths:
-            messagebox.showinfo("Cut", "No files selected.")
+            big_showinfo(self, "Cut", "No files selected.")
             return
 
         self.clipboard_paths = paths
@@ -4262,7 +4744,7 @@ class QuickFilesWidget(ctk.CTkFrame):
                 operation = "copy"
                 self._log(f"Pasting {len(win_files)} file(s) from Windows clipboard", "info")
             else:
-                messagebox.showinfo("Paste", "Clipboard is empty. Copy or cut files first.")
+                big_showinfo(self, "Paste", "Clipboard is empty. Copy or cut files first.")
                 return
 
         dest_pane = self.left_pane if pane == "left" else self.right_pane
@@ -4280,8 +4762,8 @@ class QuickFilesWidget(ctk.CTkFrame):
         count = len(paths_to_paste)
         op_name = "Copy" if operation == "copy" else "Move"
 
-        if messagebox.askyesno(f"Confirm {op_name}",
-            f"{op_name} {count} item(s) to:\n{dest}?"):
+        if big_askyesno(self, f"Confirm {op_name}",
+                        f"{op_name} {count} item(s) to:\n{dest}?"):
 
             self._log(f"{op_name}ing {count} items to {dest}", "info")
 
@@ -4290,14 +4772,16 @@ class QuickFilesWidget(ctk.CTkFrame):
                     paths_to_paste,
                     dest,
                     progress_callback=lambda p: self._update_progress(p),
-                    complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane)
+                    complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane),
+                    conflict_callback=self._ask_conflict_resolution
                 )
             else:  # move
                 self.op_manager.move_with_progress(
                     paths_to_paste,
                     dest,
                     progress_callback=lambda p: self._update_progress(p),
-                    complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane, source_pane)
+                    complete_callback=lambda r: self._operation_complete(op_name, r, dest_pane, source_pane),
+                    conflict_callback=self._ask_conflict_resolution
                 )
                 # Clear clipboard after move
                 self.clipboard_paths = []

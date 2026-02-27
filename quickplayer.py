@@ -578,17 +578,46 @@ class QuickPlayerWidget(ctk.CTkFrame):
         self.after(500, bind_to_toplevel)
 
     def _setup_mousewheel_volume(self):
-        """Bind mouse wheel on the player area to adjust player volume"""
+        """Bind mouse wheel on the player area to adjust player volume.
+        VLC's DirectX surface steals mouse events from Tk frames when video
+        is embedded, so we also bind to the toplevel window as a fallback."""
         def on_scroll(event):
             if self.current_mode == "video" and self.current_file:
                 delta = 5 if event.delta > 0 else -5
                 self._adjust_volume(delta)
                 return "break"
 
+        # Widget-level bindings (work for audio; VLC steals these for video)
         self.video_frame.bind('<MouseWheel>', on_scroll)
         self.controls_frame.bind('<MouseWheel>', on_scroll)
         self.content_container.bind('<MouseWheel>', on_scroll)
         self.placeholder.bind('<MouseWheel>', on_scroll)
+
+        # Toplevel binding - VLC can't intercept this
+        def bind_wheel_toplevel():
+            try:
+                top = self.winfo_toplevel()
+                top.bind('<MouseWheel>', lambda e: self._toplevel_scroll(e), add="+")
+            except Exception:
+                pass
+        self.after(600, bind_wheel_toplevel)
+
+    def _toplevel_scroll(self, event):
+        """Handle mouse wheel from toplevel - check cursor is over player area"""
+        if self.current_mode != "video" or not self.current_file:
+            return
+        try:
+            # Check if cursor is over this QuickPlayer widget
+            mx, my = self.winfo_pointerxy()
+            wx = self.winfo_rootx()
+            wy = self.winfo_rooty()
+            ww = self.winfo_width()
+            wh = self.winfo_height()
+            if wx <= mx <= wx + ww and wy <= my <= wy + wh:
+                delta = 5 if event.delta > 0 else -5
+                self._adjust_volume(delta)
+        except Exception:
+            pass
 
     def _is_typing(self, event):
         """Check if user is typing in a text input (don't steal keystrokes)"""

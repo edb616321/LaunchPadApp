@@ -28,6 +28,7 @@ from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import sqlite3
+from spellchecker import SpellChecker
 import webbrowser
 import urllib3
 
@@ -52,6 +53,63 @@ COLORS = {
     "accent": "#00BFFF",         # VIVID SKY BLUE buttons
     "accent_hover": "#1E90FF",   # DODGER BLUE hover
 }
+
+
+def _big_dialog(parent, title, message, buttons, icon_char=""):
+    """Create a large themed dialog. Returns the button text clicked."""
+    result = [None]
+    dlg = ctk.CTkToplevel(parent)
+    dlg.title(title)
+    dlg.configure(fg_color=COLORS["bg_dark"])
+    dlg.grab_set()
+    dlg.focus_force()
+    dlg.resizable(False, False)
+    content = ctk.CTkFrame(dlg, fg_color="transparent")
+    content.pack(fill="both", expand=True, padx=30, pady=20)
+    if icon_char:
+        ctk.CTkLabel(content, text=icon_char, font=ctk.CTkFont(size=48),
+                     text_color=COLORS["accent"]).pack(pady=(0, 10))
+    ctk.CTkLabel(content, text=message, font=ctk.CTkFont(size=22),
+                 text_color=COLORS["text"], wraplength=550,
+                 justify="center").pack(pady=(0, 20))
+    btn_frame = ctk.CTkFrame(content, fg_color="transparent")
+    btn_frame.pack(pady=(0, 5))
+    def on_click(val):
+        result[0] = val
+        dlg.destroy()
+    for label, color in buttons:
+        ctk.CTkButton(
+            btn_frame, text=label, width=160, height=45,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color=color, hover_color=COLORS["accent_hover"],
+            command=lambda v=label: on_click(v)
+        ).pack(side="left", padx=8)
+    dlg.update_idletasks()
+    w = max(500, dlg.winfo_reqwidth() + 40)
+    h = dlg.winfo_reqheight() + 20
+    dlg.geometry(f"{w}x{h}")
+    try:
+        px = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        dlg.geometry(f"+{max(0,px)}+{max(0,py)}")
+    except Exception:
+        pass
+    dlg.wait_window()
+    return result[0]
+
+def big_showinfo(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", COLORS["accent"])], icon_char="i")
+
+def big_showerror(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", "#CC3333")], icon_char="!")
+
+def big_showwarning(parent, title, message):
+    _big_dialog(parent, title, message, [("OK", "#CC8800")], icon_char="!")
+
+def big_askyesno(parent, title, message) -> bool:
+    r = _big_dialog(parent, title, message,
+                    [("Yes", COLORS["accent"]), ("No", COLORS["card_bg"])], icon_char="?")
+    return r == "Yes"
 
 
 class CommandCenterApp(ctk.CTk):
@@ -283,34 +341,47 @@ class CommandCenterApp(ctk.CTk):
         search_label = ctk.CTkLabel(
             search_frame,
             text="🔍",
-            font=ctk.CTkFont(size=28)
+            font=ctk.CTkFont(size=40)
         )
-        search_label.pack(side="left", padx=(0, 10))
+        search_label.pack(side="left", padx=(0, 15))
 
         self.url_search_entry = ctk.CTkEntry(
             search_frame,
-            width=400,
-            height=50,
-            font=ctk.CTkFont(size=20),
+            width=700,
+            height=70,
+            font=ctk.CTkFont(size=28),
             placeholder_text="Enter URL or search query...",
             fg_color=COLORS["card_bg"],
             border_color=COLORS["accent"],
             text_color=COLORS["text"]
         )
-        self.url_search_entry.pack(side="left", padx=(0, 10))
+        self.url_search_entry.pack(side="left", padx=(0, 15))
         self.url_search_entry.bind("<Return>", self._on_url_search_submit)
 
         go_btn = ctk.CTkButton(
             search_frame,
             text="Go",
-            width=70,
-            height=50,
-            font=ctk.CTkFont(size=20, weight="bold"),
+            width=100,
+            height=70,
+            font=ctk.CTkFont(size=28, weight="bold"),
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             command=self._on_url_search_click
         )
         go_btn.pack(side="left")
+
+        # QuickSpell button
+        spell_btn = ctk.CTkButton(
+            search_frame,
+            text="QuickSpell",
+            width=200,
+            height=70,
+            font=ctk.CTkFont(size=26, weight="bold"),
+            fg_color="#6A0DAD",
+            hover_color="#8B2FC9",
+            command=self._open_quickspell
+        )
+        spell_btn.pack(side="left", padx=(20, 0))
 
         # Add App button - BIGGER
         add_btn = ctk.CTkButton(
@@ -558,6 +629,233 @@ class CommandCenterApp(ctk.CTk):
         # Clear the entry after submission
         self.url_search_entry.delete(0, "end")
 
+    def _load_quickspell_history(self):
+        """Load QuickSpell lookup history from file"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quickspell_history.json")
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_quickspell_history(self, history):
+        """Save QuickSpell lookup history to file"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quickspell_history.json")
+        with open(path, "w") as f:
+            json.dump(history[:50], f, indent=2)  # Keep last 50
+
+    def _open_quickspell(self):
+        """Open the QuickSpell spell checker and thesaurus popup"""
+        popup = ctk.CTkToplevel(self)
+        popup.title("QuickSpell")
+        popup.geometry("1050x650")
+        popup.configure(fg_color=COLORS["bg_dark"])
+        popup.attributes("-topmost", True)
+        popup.after(100, lambda: popup.focus_force())
+
+        spell = SpellChecker()
+        history = self._load_quickspell_history()
+
+        # Title
+        ctk.CTkLabel(
+            popup, text="QuickSpell", font=ctk.CTkFont(size=28, weight="bold"),
+            text_color=COLORS["text"]
+        ).pack(pady=(15, 5))
+
+        # Input frame
+        input_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        input_frame.pack(fill="x", padx=20, pady=10)
+
+        word_entry = ctk.CTkEntry(
+            input_frame, width=450, height=50, font=ctk.CTkFont(size=22),
+            placeholder_text="Type a word...",
+            fg_color=COLORS["card_bg"], border_color=COLORS["accent"],
+            text_color=COLORS["text"]
+        )
+        word_entry.pack(side="left", padx=(0, 10))
+        word_entry.focus_set()
+
+        # Main content: results on left, history on right
+        content_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True, padx=20, pady=(5, 15))
+
+        # Results area (left side)
+        results_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        results_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        results = ctk.CTkTextbox(
+            results_frame, font=ctk.CTkFont(size=18),
+            fg_color=COLORS["card_bg"], text_color=COLORS["text"],
+            border_color=COLORS["accent"], border_width=1
+        )
+        results.pack(fill="both", expand=True)
+
+        # Recent lookups panel (right side)
+        history_frame = ctk.CTkFrame(content_frame, fg_color=COLORS["card_bg"],
+                                     border_color=COLORS["accent"], border_width=1,
+                                     width=320)
+        history_frame.pack(side="right", fill="y")
+        history_frame.pack_propagate(False)
+
+        ctk.CTkLabel(
+            history_frame, text="Recent Lookups",
+            font=ctk.CTkFont(size=18, weight="bold"), text_color=COLORS["text"]
+        ).pack(pady=(10, 5))
+
+        # Scrollable frame for history items
+        history_scroll = ctk.CTkScrollableFrame(
+            history_frame, fg_color=COLORS["card_bg"],
+            scrollbar_button_color=COLORS["accent"]
+        )
+        history_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        def refresh_history_list():
+            """Rebuild the history list UI"""
+            for widget in history_scroll.winfo_children():
+                widget.destroy()
+            for entry in history:
+                item_frame = ctk.CTkFrame(history_scroll, fg_color="transparent")
+                item_frame.pack(fill="x", pady=2)
+
+                original = entry.get("original", "")
+                corrected = entry.get("corrected", "")
+                was_misspelled = original != corrected
+
+                # Show "original -> corrected" or just the word
+                if was_misspelled:
+                    display = f"{original}  ->  {corrected}"
+                    color = "#FF6B6B"
+                else:
+                    display = corrected
+                    color = "#90EE90"
+
+                btn = ctk.CTkButton(
+                    item_frame, text=display, anchor="w",
+                    font=ctk.CTkFont(size=15),
+                    fg_color="transparent", hover_color=COLORS["card_hover"],
+                    text_color=color, height=30,
+                    command=lambda w=corrected: (word_entry.delete(0, "end"),
+                                                 word_entry.insert(0, w), do_check())
+                )
+                btn.pack(fill="x")
+
+        # Clear history button
+        clear_hist_btn = ctk.CTkButton(
+            history_frame, text="Clear History", height=30,
+            font=ctk.CTkFont(size=14),
+            fg_color=COLORS["bg_dark"], hover_color="#8B2FC9",
+            command=lambda: (history.clear(), self._save_quickspell_history(history),
+                             refresh_history_list())
+        )
+        clear_hist_btn.pack(pady=(0, 8))
+
+        refresh_history_list()
+
+        def do_check(event=None):
+            word = word_entry.get().strip().lower()
+            if not word:
+                return
+            results.delete("1.0", "end")
+            results.insert("end", f"  Word: {word}\n", "header")
+            results.insert("end", "=" * 50 + "\n\n")
+
+            # Spell check
+            misspelled = spell.unknown([word])
+            if misspelled:
+                corrections = spell.candidates(word)
+                most_likely = spell.correction(word)
+                corrected_word = most_likely or word
+                results.insert("end", "  SPELLING: ", "label")
+                results.insert("end", f"Misspelled\n", "error")
+                results.insert("end", f"  Suggested: {most_likely}\n")
+                if corrections:
+                    others = sorted(corrections - {most_likely}) if most_likely else sorted(corrections)
+                    if others:
+                        results.insert("end", f"  Other options: {', '.join(others[:10])}\n")
+            else:
+                corrected_word = word
+                results.insert("end", "  SPELLING: ", "label")
+                results.insert("end", "Correct\n", "good")
+            results.insert("end", "\n")
+
+            # Add to history (avoid duplicates at the top)
+            new_entry = {"original": word, "corrected": corrected_word}
+            # Remove existing entry for same word if present
+            history[:] = [h for h in history if h.get("original") != word]
+            history.insert(0, new_entry)
+            if len(history) > 50:
+                history[:] = history[:50]
+            self._save_quickspell_history(history)
+            refresh_history_list()
+
+            # Thesaurus via Datamuse API (free, no key needed)
+            def fetch_thesaurus():
+                try:
+                    lookup = corrected_word  # Use corrected spelling for thesaurus
+                    resp = requests.get(f"https://api.datamuse.com/words?rel_syn={lookup}&max=15", timeout=5)
+                    syns = [w["word"] for w in resp.json()] if resp.ok else []
+
+                    resp2 = requests.get(f"https://api.datamuse.com/words?rel_ant={lookup}&max=10", timeout=5)
+                    ants = [w["word"] for w in resp2.json()] if resp2.ok else []
+
+                    resp3 = requests.get(f"https://api.datamuse.com/words?ml={lookup}&max=15", timeout=5)
+                    related = [w["word"] for w in resp3.json() if w["word"] != lookup] if resp3.ok else []
+
+                    resp4 = requests.get(f"https://api.datamuse.com/words?sp={lookup}&md=d&max=1", timeout=5)
+                    defs = []
+                    if resp4.ok and resp4.json():
+                        defs = resp4.json()[0].get("defs", [])
+
+                    def update_ui():
+                        if defs:
+                            results.insert("end", "  DEFINITION:\n", "label")
+                            for d in defs[:3]:
+                                parts = d.split("\t", 1)
+                                if len(parts) == 2:
+                                    results.insert("end", f"    [{parts[0]}] {parts[1]}\n")
+                                else:
+                                    results.insert("end", f"    {d}\n")
+                            results.insert("end", "\n")
+
+                        if syns:
+                            results.insert("end", "  SYNONYMS:\n", "label")
+                            results.insert("end", f"    {', '.join(syns)}\n\n")
+                        else:
+                            results.insert("end", "  SYNONYMS: ", "label")
+                            results.insert("end", "None found\n\n")
+
+                        if ants:
+                            results.insert("end", "  ANTONYMS:\n", "label")
+                            results.insert("end", f"    {', '.join(ants)}\n\n")
+
+                        if related:
+                            results.insert("end", "  RELATED WORDS:\n", "label")
+                            results.insert("end", f"    {', '.join(related[:15])}\n")
+
+                    popup.after(0, update_ui)
+                except Exception as e:
+                    popup.after(0, lambda: results.insert("end", f"\n  Thesaurus unavailable: {e}\n"))
+
+            threading.Thread(target=fetch_thesaurus, daemon=True).start()
+
+        check_btn = ctk.CTkButton(
+            input_frame, text="Check", width=100, height=50,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            fg_color="#6A0DAD", hover_color="#8B2FC9",
+            command=do_check
+        )
+        check_btn.pack(side="left", padx=(0, 10))
+
+        clear_btn = ctk.CTkButton(
+            input_frame, text="Clear", width=80, height=50,
+            font=ctk.CTkFont(size=20),
+            fg_color=COLORS["card_bg"], hover_color=COLORS["accent"],
+            command=lambda: (word_entry.delete(0, "end"), results.delete("1.0", "end"), word_entry.focus_set())
+        )
+        clear_btn.pack(side="left")
+
+        word_entry.bind("<Return>", do_check)
+
     def log_message(self, message: str, level: str = "info"):
         """Log a message (prints to console only now that Activity Log is replaced)"""
         # Get current timestamp
@@ -620,7 +918,7 @@ class CommandCenterApp(ctk.CTk):
         except Exception as e:
             error_msg = f"Failed to save apps: {str(e)}"
             self.log_message(error_msg, "error")
-            messagebox.showerror("Error", error_msg)
+            big_showerror(self, "Error", error_msg)
 
     def refresh_app_grid(self):
         """Refresh the app grid display"""
@@ -1049,7 +1347,7 @@ class CommandCenterApp(ctk.CTk):
             path = path_entry.get().strip()
 
             if not name or not path:
-                messagebox.showwarning("Validation Error", "Name and Path are required!")
+                big_showwarning(self, "Validation Error", "Name and Path are required!")
                 return
 
             # Map M2/M3/M4 to screeninfo indices (skipping 1 = ultra-wide)
@@ -1097,7 +1395,7 @@ class CommandCenterApp(ctk.CTk):
 
     def delete_app(self, app: Dict):
         """Delete an app"""
-        if messagebox.askyesno("Delete App", f"Are you sure you want to delete '{app['name']}'?"):
+        if big_askyesno(self, "Delete App", f"Are you sure you want to delete '{app['name']}'?"):
             self.apps.remove(app)
             self.save_apps()
             self.refresh_app_grid()
@@ -1185,7 +1483,7 @@ class CommandCenterApp(ctk.CTk):
         except Exception as e:
             error_msg = f"Failed to launch {app['name']}: {str(e)}"
             self.log_message(error_msg, "error")
-            messagebox.showerror("Launch Error", error_msg)
+            big_showerror(self, "Launch Error", error_msg)
 
     def move_window_to_monitor(self, app_name: str, monitor_index: int) -> bool:
         """Move a window to a specific monitor - returns True if successful"""
@@ -1345,7 +1643,7 @@ class CommandCenterApp(ctk.CTk):
             path = path_entry.get().strip()
 
             if not name or not path:
-                messagebox.showwarning("Validation Error", "Name and Path are required!")
+                big_showwarning(self, "Validation Error", "Name and Path are required!")
                 return
 
             # Map M2/M3/M4 to screeninfo indices (skipping 1 = ultra-wide)
@@ -1480,30 +1778,8 @@ Accent Hover: {COLORS['accent_hover']}
         close_btn.pack(pady=(20, 0))
 
 
-def ensure_network_drives():
-    """Ensure network drives are mounted before app starts"""
-    # M: drive - NFS mount to Plex/NAS server
-    if not os.path.exists("M:\\"):
-        print("[DRIVES] M: not mounted, attempting NFS mount to 10.0.0.111...")
-        try:
-            result = subprocess.run(
-                ['cmd', '/c', r'C:\Windows\System32\mount.exe -U:edb616321 -p:#CLSadmin09 \\10.0.0.111\mnt\brkmn-main-pool\New-plexserver-dataset M:'],
-                capture_output=True, text=True, timeout=15
-            )
-            if result.returncode == 0:
-                print("[DRIVES] M: mounted successfully")
-            else:
-                print(f"[DRIVES] M: mount failed: {result.stderr.strip()}")
-        except Exception as e:
-            print(f"[DRIVES] M: mount error: {e}")
-    else:
-        print("[DRIVES] M: already mounted")
-
-
 def main():
     """Main entry point"""
-    # Ensure network drives are available
-    ensure_network_drives()
 
     # Force appearance mode and disable default themes
     ctk.set_appearance_mode("dark")

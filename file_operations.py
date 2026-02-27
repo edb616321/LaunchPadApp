@@ -19,6 +19,14 @@ class OperationType(Enum):
     DELETE = "delete"
 
 
+class ConflictResolution(Enum):
+    OVERWRITE = "overwrite"
+    SKIP = "skip"
+    RENAME = "rename"
+    OVERWRITE_ALL = "overwrite_all"
+    SKIP_ALL = "skip_all"
+
+
 @dataclass
 class FileOperationResult:
     """Result of a file operation"""
@@ -83,12 +91,13 @@ class FileOperationManager:
         sources: List[str],
         destination: str,
         progress_callback: Optional[Callable[[OperationProgress], None]] = None,
-        complete_callback: Optional[Callable[[List[FileOperationResult]], None]] = None
+        complete_callback: Optional[Callable[[List[FileOperationResult]], None]] = None,
+        conflict_callback: Optional[Callable[[str, str], ConflictResolution]] = None
     ):
         """Copy files/folders with progress reporting (runs in thread)"""
         thread = threading.Thread(
             target=self._copy_worker,
-            args=(sources, destination, progress_callback, complete_callback),
+            args=(sources, destination, progress_callback, complete_callback, conflict_callback),
             daemon=True
         )
         thread.start()
@@ -99,13 +108,15 @@ class FileOperationManager:
         sources: List[str],
         destination: str,
         progress_callback: Optional[Callable[[OperationProgress], None]],
-        complete_callback: Optional[Callable[[List[FileOperationResult]], None]]
+        complete_callback: Optional[Callable[[List[FileOperationResult]], None]],
+        conflict_callback: Optional[Callable[[str, str], ConflictResolution]] = None
     ):
         """Worker thread for copy operation"""
         self.reset()
         results = []
         total_bytes = self.get_total_size(sources)
         bytes_done = 0
+        remember_choice = None  # For "apply to all" choices
 
         for idx, source in enumerate(sources):
             if self.is_cancelled():
@@ -120,7 +131,34 @@ class FileOperationManager:
                 dest_path = Path(destination) / source_path.name
 
                 # Handle name conflicts
-                dest_path = self._get_unique_path(dest_path)
+                if dest_path.exists() and conflict_callback:
+                    if remember_choice == ConflictResolution.OVERWRITE_ALL:
+                        resolution = ConflictResolution.OVERWRITE
+                    elif remember_choice == ConflictResolution.SKIP_ALL:
+                        resolution = ConflictResolution.SKIP
+                    else:
+                        resolution = conflict_callback(source, str(dest_path))
+                        if resolution == ConflictResolution.OVERWRITE_ALL:
+                            remember_choice = ConflictResolution.OVERWRITE_ALL
+                            resolution = ConflictResolution.OVERWRITE
+                        elif resolution == ConflictResolution.SKIP_ALL:
+                            remember_choice = ConflictResolution.SKIP_ALL
+                            resolution = ConflictResolution.SKIP
+
+                    if resolution == ConflictResolution.SKIP:
+                        results.append(FileOperationResult(
+                            success=True, source=source, destination=str(dest_path),
+                            error="Skipped (already exists)"
+                        ))
+                        if source_path.is_file():
+                            bytes_done += os.path.getsize(source)
+                        continue
+                    elif resolution == ConflictResolution.RENAME:
+                        dest_path = self._get_unique_path(dest_path)
+                    # OVERWRITE: just proceed, will overwrite
+                elif dest_path.exists():
+                    # No conflict callback - use old behavior (auto-rename)
+                    dest_path = self._get_unique_path(dest_path)
 
                 if source_path.is_file():
                     # Copy file with progress
@@ -234,12 +272,13 @@ class FileOperationManager:
         sources: List[str],
         destination: str,
         progress_callback: Optional[Callable[[OperationProgress], None]] = None,
-        complete_callback: Optional[Callable[[List[FileOperationResult]], None]] = None
+        complete_callback: Optional[Callable[[List[FileOperationResult]], None]] = None,
+        conflict_callback: Optional[Callable[[str, str], ConflictResolution]] = None
     ):
         """Move files/folders with progress reporting (runs in thread)"""
         thread = threading.Thread(
             target=self._move_worker,
-            args=(sources, destination, progress_callback, complete_callback),
+            args=(sources, destination, progress_callback, complete_callback, conflict_callback),
             daemon=True
         )
         thread.start()
@@ -250,11 +289,13 @@ class FileOperationManager:
         sources: List[str],
         destination: str,
         progress_callback: Optional[Callable[[OperationProgress], None]],
-        complete_callback: Optional[Callable[[List[FileOperationResult]], None]]
+        complete_callback: Optional[Callable[[List[FileOperationResult]], None]],
+        conflict_callback: Optional[Callable[[str, str], ConflictResolution]] = None
     ):
         """Worker thread for move operation"""
         self.reset()
         results = []
+        remember_choice = None
 
         # Check if same drive - can use fast rename
         dest_drive = os.path.splitdrive(destination)[0].upper()
@@ -273,7 +314,36 @@ class FileOperationManager:
                 dest_path = Path(destination) / source_path.name
 
                 # Handle name conflicts
-                dest_path = self._get_unique_path(dest_path)
+                if dest_path.exists() and conflict_callback:
+                    if remember_choice == ConflictResolution.OVERWRITE_ALL:
+                        resolution = ConflictResolution.OVERWRITE
+                    elif remember_choice == ConflictResolution.SKIP_ALL:
+                        resolution = ConflictResolution.SKIP
+                    else:
+                        resolution = conflict_callback(source, str(dest_path))
+                        if resolution == ConflictResolution.OVERWRITE_ALL:
+                            remember_choice = ConflictResolution.OVERWRITE_ALL
+                            resolution = ConflictResolution.OVERWRITE
+                        elif resolution == ConflictResolution.SKIP_ALL:
+                            remember_choice = ConflictResolution.SKIP_ALL
+                            resolution = ConflictResolution.SKIP
+
+                    if resolution == ConflictResolution.SKIP:
+                        results.append(FileOperationResult(
+                            success=True, source=source, destination=str(dest_path),
+                            error="Skipped (already exists)"
+                        ))
+                        continue
+                    elif resolution == ConflictResolution.RENAME:
+                        dest_path = self._get_unique_path(dest_path)
+                    elif resolution == ConflictResolution.OVERWRITE:
+                        # Remove existing before move
+                        if dest_path.is_file():
+                            os.remove(str(dest_path))
+                        elif dest_path.is_dir():
+                            shutil.rmtree(str(dest_path))
+                elif dest_path.exists():
+                    dest_path = self._get_unique_path(dest_path)
 
                 # Report progress
                 self._report_progress(

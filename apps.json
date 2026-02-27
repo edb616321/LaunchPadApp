@@ -1,5 +1,12 @@
 [
   {
+    "name": "Study AIP-C01",
+    "path": "C:\\Python314\\python.exe",
+    "args": ["D:\\LaunchPadApp\\study_aipc01.py"],
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
     "name": "Dual-Pane",
     "path": "http://10.0.0.251:8201/dual-pane",
     "category": "Quick Links",
@@ -130,6 +137,12 @@
   {
     "name": "QuickMedia",
     "path": "D:\\QuickMedia\\quickmedia.py",
+    "category": "Quick Links",
+    "monitor": 0
+  },
+  {
+    "name": "QuickResync",
+    "path": "D:\\QuickResync\\quickresync.py",
     "category": "Quick Links",
     "monitor": 0
   },
@@ -387,6 +400,13 @@
     "monitor": 2
   },
   {
+    "name": "Study AIP-C01",
+    "path": "C:\\Python314\\python.exe",
+    "args": ["D:\\LaunchPadApp\\study_aipc01.py"],
+    "category": "Learning and Certifications",
+    "monitor": 0
+  },
+  {
     "name": "ESXi Console",
     "path": "https://10.0.0.220/ui/",
     "category": "Virtual Machines",
@@ -449,7 +469,8 @@
   },
   {
     "name": "StreamFab",
-    "path": "C:\\Program Files\\DVDFab\\StreamFab\\StreamFab64.exe",
+    "path": "C:\\Windows\\System32\\mstsc.exe",
+    "args": ["/v:10.0.0.207"],
     "category": "DVDFab",
     "monitor": 0
   },
